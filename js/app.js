@@ -5,7 +5,7 @@ import { GROUPS, CATEGORIES, GROUP_BY_ID, catInfo, groupOf, UNCATEGORIZED, UNCAT
 import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -30,7 +30,7 @@ const S = {
   analyse: 'categorie',
   trendGroups: null,
   charts: {},
-  dirtyMonths: new Set(),
+  dirtyIds: new Set(),
   dirtySettings: false,
   saveTimer: null,
 };
@@ -182,7 +182,8 @@ function setSaveState(state) {
   d.title = state === 'busy' ? 'Opslaan' : state === 'err' ? 'Opslaan mislukt' : 'Opgeslagen';
 }
 
-function markTx(...txs) { for (const t of txs) S.dirtyMonths.add(t.date.slice(0, 7)); scheduleSave(); }
+function markTx(...txs) { for (const t of txs) S.dirtyIds.add(t.id); scheduleSave(); }
+function markIds(ids) { for (const id of ids) S.dirtyIds.add(id); scheduleSave(); }
 function markSettings() { S.dirtySettings = true; scheduleSave(); }
 
 function scheduleSave() {
@@ -193,18 +194,18 @@ function scheduleSave() {
 
 async function flush() {
   clearTimeout(S.saveTimer);
-  const months = [...S.dirtyMonths];
+  const ids = [...S.dirtyIds];
   const settings = S.dirtySettings;
-  S.dirtyMonths.clear();
+  S.dirtyIds.clear();
   S.dirtySettings = false;
-  if (!months.length && !settings) { setSaveState('ok'); return; }
+  if (!ids.length && !settings) { setSaveState('ok'); return; }
   try {
-    if (months.length) await S.store.saveMonths(months, S.txs);
+    if (ids.length) await S.store.saveTxs(ids, S.txs);
     if (settings) await S.store.saveSettings(S.settings);
     setSaveState('ok');
   } catch (e) {
     console.error(e);
-    months.forEach((m) => S.dirtyMonths.add(m));
+    ids.forEach((id) => S.dirtyIds.add(id));
     if (settings) S.dirtySettings = true;
     setSaveState('err');
     toast('Opslaan mislukt: ' + e.message);
@@ -325,7 +326,7 @@ function render() {
     <nav class="tabbar" aria-label="Hoofdmenu"><div class="tabbar-inner">
       ${Object.keys(TAB_NAMES).map((v) => `<button class="tab ${S.view === v ? 'on' : ''}" data-act="nav" data-v="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${ICONS[v]}<span>${TAB_NAMES[v]}</span></button>`).join('')}
     </div></nav>`;
-  setSaveState(S.dirtyMonths.size || S.dirtySettings ? 'busy' : 'ok');
+  setSaveState(S.dirtyIds.size || S.dirtySettings ? 'busy' : 'ok');
   afterRender();
 }
 
@@ -1476,10 +1477,10 @@ async function restoreBackup(file) {
     const data = JSON.parse(await file.text());
     if (!Array.isArray(data.txs)) throw new Error('geen geldige back-up');
     if (!confirm(`Back-up van ${data.exported?.slice(0, 10) || 'onbekende datum'} met ${data.txs.length} transacties terugzetten? Huidige gegevens worden vervangen.`)) return;
-    const oldMonths = new Set(S.txs.map((t) => t.date.slice(0, 7)));
+    const oldIds = S.txs.map((t) => t.id);
     S.txs = data.txs;
     S.settings = { ...DEFAULT_SETTINGS, ...(data.settings || {}) };
-    oldMonths.forEach((m) => S.dirtyMonths.add(m));
+    markIds(oldIds);
     markTx(...S.txs);
     markSettings();
     S.period = { mode: 'month', anchor: defaultAnchor() };
@@ -1493,7 +1494,7 @@ async function restoreBackup(file) {
 async function wipeAll() {
   if (!confirm('Alle transacties, regels en instellingen wissen? Dit kan niet ongedaan worden gemaakt. Download eventueel eerst een back-up.')) return;
   clearTimeout(S.saveTimer);
-  S.dirtyMonths.clear();
+  S.dirtyIds.clear();
   S.dirtySettings = false;
   await S.store.wipe();
   S.txs = [];
@@ -1613,6 +1614,47 @@ function openCustomPeriod() {
 $('#fileInput').addEventListener('change', (e) => handleFile(e.target.files[0]));
 $('#backupInput').addEventListener('change', (e) => { if (e.target.files[0]) restoreBackup(e.target.files[0]); });
 
+/* ---------- Wijzigingen van andere apparaten ---------- */
+
+function stable(v) {
+  if (Array.isArray(v)) return '[' + v.map(stable).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
+  return JSON.stringify(v);
+}
+
+let remoteTimer;
+function onRemote({ months, settings }) {
+  let changed = false;
+  if (months) {
+    for (const [mk, list] of Object.entries(months)) {
+      const remote = new Map((list || []).map((t) => [t.id, t]));
+      const index = new Map(S.txs.map((t, i) => [t.id, i]));
+      for (const rt of remote.values()) {
+        if (S.dirtyIds.has(rt.id)) continue; // eigen wijziging die nog wordt opgeslagen gaat voor
+        const i = index.get(rt.id);
+        if (i == null) { S.txs.push(rt); changed = true; } else if (stable(S.txs[i]) !== stable(rt)) { S.txs[i] = rt; changed = true; }
+      }
+      const before = S.txs.length;
+      S.txs = S.txs.filter((t) => t.date.slice(0, 7) !== mk || remote.has(t.id) || S.dirtyIds.has(t.id));
+      if (S.txs.length !== before) changed = true;
+    }
+  }
+  if (settings && !S.dirtySettings) {
+    const next = { ...DEFAULT_SETTINGS, ...settings };
+    if (stable(next) !== stable(S.settings)) { S.settings = next; changed = true; }
+  }
+  if (!changed) return;
+  clearTimeout(remoteTimer);
+  const go = () => {
+    const a = document.activeElement;
+    if (a && $('#app').contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) { remoteTimer = setTimeout(go, 1500); return; }
+    if (S.period.mode === 'month' && !S.period.anchor) S.period.anchor = defaultAnchor();
+    render();
+    toast('Bijgewerkt vanaf een ander apparaat');
+  };
+  remoteTimer = setTimeout(go, 300);
+}
+
 /* ---------- Inloggen en starten ---------- */
 
 function renderLogin(errMsg = '') {
@@ -1652,7 +1694,7 @@ function renderLogin(errMsg = '') {
 async function loadData() {
   $('#app').innerHTML = '<div class="boot"><div class="boot-mark"></div><p>Gegevens ophalen</p></div>';
   try {
-    const { txs, settings } = await S.store.load();
+    const { txs, settings } = await S.store.load({ onRemote });
     S.txs = txs || [];
     S.settings = { ...DEFAULT_SETTINGS, ...(settings || {}) };
   } catch (e) {
@@ -1687,4 +1729,4 @@ async function start() {
 start();
 
 // Voor testen in de console
-window.geldzicht = { S, L, render };
+window.geldzicht = { S, L, render, onRemote };

@@ -35,7 +35,9 @@ Maak een nieuw project aan, los van je LeCoins-project.
 
 Open de app opnieuw: je ziet nu een inlogscherm. Na het inloggen worden je gegevens in Firestore bewaard en zijn ze op elk apparaat hetzelfde.
 
-Het gratis Firebase-abonnement (Spark) is ruim voldoende: transacties worden per maand in één document opgeslagen, dus een jaar data is ongeveer twaalf documenten.
+Wijzigingen worden live gesynchroniseerd: pas je iets aan op je telefoon, dan zie je het binnen een paar seconden op je laptop als de app daar open staat. Per wijziging wordt alleen die ene transactie opgeslagen, dus twee apparaten overschrijven elkaar niet. Offline werkt de app ook; wijzigingen worden verstuurd zodra je weer verbinding hebt (het stipje rechtsboven is dan oranje).
+
+Het gratis Firebase-abonnement (Spark) is ruim voldoende: transacties worden per maand gebundeld in één document, dus een jaar data is ongeveer twaalf documenten om te lezen.
 
 ## Stap 3: op je telefoon zetten
 
