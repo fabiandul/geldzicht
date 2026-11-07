@@ -1,11 +1,11 @@
 import { firebaseConfig, APP_NAME } from './config.js';
 import { createStore } from './store.js';
-import { parseText, parseAbnXlsRows, decodeBytes } from './parser.js';
+import { parseText, parseAbnXlsRows, decodeBytes, parseAmount } from './parser.js';
 import { GROUPS, CATEGORIES, GROUP_BY_ID, catInfo, groupOf, UNCATEGORIZED, UNCATEGORIZED_IN } from './categories.js';
 import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -1024,7 +1024,9 @@ function renderNetWorth() {
   const first = series[0];
   const tot = splitEur(cur.total);
   const snaps = S.settings.investSnapshots || [];
-  const gain = snaps.length ? cur.invest - cur.inleg : null;
+  const pf = latestPortfolio();
+  const pfGain = pf ? (pf.gain != null ? pf.gain : portfolioGain(pf.positions)) : null;
+  const gain = pfGain != null ? pfGain : snaps.length ? cur.invest - cur.inleg : null;
   const transfers = vt.filter((t) => t.account === mainAcc() && L.kindOf(t) === 'transfer' && !t.excluded).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
   const rmap = L.reimbursementMap(vt);
   return `
@@ -1038,13 +1040,14 @@ function renderNetWorth() {
         <div class="nw-part"><div class="lab"><i style="background:var(--s-invest)"></i>Beleggen</div><div class="val num">${eur(cur.invest, true)}</div><div class="sub">${gain != null ? `${sgn(gain, true)} rendement` : 'alleen inleg'}</div></div>
       </div>
     </section>
+    ${pf ? renderPortfolio(pf) : ''}
     <section>
       <div class="panel">
         <div class="legend"><span><i style="background:var(--s-betaal)"></i>Betaalrekening</span><span><i style="background:var(--s-spaar)"></i>Sparen</span><span><i style="background:var(--s-invest)"></i>Beleggen</span></div>
         <div class="chart-box tall"><canvas id="nwChart" aria-label="Vermogen per maand"></canvas></div>
       </div>
       <p class="help">Geld naar je spaarrekening of BUX is een verschuiving binnen je vermogen: het totaal blijft gelijk en het telt niet als uitgave.</p>
-      <div class="btn-row"><button class="btn quiet small" data-act="nw-update">Waarde beleggingen bijwerken</button><button class="btn quiet small" data-act="set" data-v="invest">Instellingen sparen en beleggen</button></div>
+      <div class="btn-row"><button class="btn quiet small" data-act="nw-update">${pf ? 'Portefeuille bijwerken' : 'Waarde beleggingen bijwerken'}</button><button class="btn quiet small" data-act="set" data-v="invest">Instellingen sparen en beleggen</button></div>
     </section>
     <section>
       <h2>Per maand</h2>
@@ -1081,27 +1084,121 @@ function drawNetWorthChart() {
   });
 }
 
+const POS_TYPES = { etf: 'ETF', aandeel: 'Aandeel', crypto: 'Crypto', cash: 'Cash', overig: 'Overig' };
+const POS_COLORS = { etf: 'var(--s-income)', aandeel: 'var(--s-expense)', crypto: '#6250d6', cash: 'var(--s-invest)', overig: 'var(--muted)' };
+
+function latestPortfolio() {
+  return [...(S.settings.investSnapshots || [])].filter((x) => x.positions && x.positions.length).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+}
+
+// Rendement volgens de percentages uit de BUX-app (waarde min wat je erin stopte).
+function portfolioGain(positions) {
+  let gain = 0;
+  let known = false;
+  for (const p of positions) {
+    if (p.type === 'cash' || p.pct == null || !isFinite(p.pct) || p.pct <= -100) continue;
+    gain += p.value - p.value / (1 + p.pct / 100);
+    known = true;
+  }
+  return known ? Math.round(gain * 100) / 100 : null;
+}
+
+function renderPortfolio(pf) {
+  const list = [...pf.positions].sort((a, b) => (a.type === 'cash') - (b.type === 'cash') || b.value - a.value);
+  const total = list.reduce((a, p) => a + p.value, 0) || 1;
+  const byType = {};
+  for (const p of list) byType[p.type] = (byType[p.type] || 0) + p.value;
+  const types = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+  const fmtShares = (n) => Number(n).toLocaleString('nl-NL', { maximumFractionDigits: 4 });
+  return `
+    <section>
+      <h2>Portefeuille <span class="aside">bijgewerkt ${fmtDate(pf.date, false)}</span></h2>
+      <div class="ribbon" role="img" aria-label="Verdeling van je beleggingen">
+        ${types.map(([t, v]) => `<span style="flex-grow:${v};background:${POS_COLORS[t] || POS_COLORS.overig}" title="${esc(POS_TYPES[t] || t)}: ${eur(v)}"></span>`).join('')}
+      </div>
+      <div class="ribbon-legend">${types.map(([t, v]) => `<span><i style="background:${POS_COLORS[t] || POS_COLORS.overig}"></i>${esc(POS_TYPES[t] || t)} ${Math.round((v / total) * 100)}%</span>`).join('')}</div>
+      <div class="tx-list" style="margin-top:12px">
+        ${list.map((p) => `<div class="tx pos-row">
+          <span class="tx-ico" style="background:color-mix(in srgb, ${POS_COLORS[p.type] || POS_COLORS.overig} 18%, transparent)">${p.type === 'cash' ? '💶' : p.type === 'etf' ? '🌍' : p.type === 'crypto' ? '🪙' : '📈'}</span>
+          <span class="tx-main"><div class="tx-name">${esc(p.name)}</div><div class="tx-sub">${esc(POS_TYPES[p.type] || 'Overig')}${p.shares ? `, ${fmtShares(p.shares)} ${Number(p.shares) === 1 ? 'stuk' : 'stuks'}` : ''}, ${Math.round((p.value / total) * 100)}%</div></span>
+          <span class="tx-amt num"><span class="amt">${eur(p.value)}</span>${p.pct != null && p.type !== 'cash' ? `<small class="${p.pct >= 0 ? 'pos' : ''}">${p.pct >= 0 ? '+' : '−'}${Math.abs(p.pct).toLocaleString('nl-NL', { maximumFractionDigits: 2 })}%</small>` : ''}</span>
+        </div>`).join('')}
+      </div>
+    </section>`;
+}
+
+function posRowHtml(p = {}) {
+  const v = (x) => (x == null || x === '' ? '' : String(x).replace('.', ','));
+  return `<div class="pos-edit">
+    <div class="pos-top"><input class="input" data-f="name" placeholder="Naam, bijv. Vanguard FTSE All-World" value="${esc(p.name || '')}" aria-label="Naam"><button class="x-btn" data-posdel aria-label="Positie verwijderen">✕</button></div>
+    <div class="pos-grid">
+      <select data-f="type" aria-label="Soort">${Object.entries(POS_TYPES).map(([k, l]) => `<option value="${k}" ${(p.type || 'etf') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <input class="input" data-f="shares" inputmode="decimal" placeholder="Aantal" value="${v(p.shares)}" aria-label="Aantal">
+      <input class="input" data-f="value" inputmode="decimal" placeholder="Waarde €" value="${v(p.value)}" aria-label="Waarde in euro">
+      <input class="input" data-f="pct" inputmode="decimal" placeholder="Rendement %" value="${v(p.pct)}" aria-label="Rendement in procent">
+    </div>
+  </div>`;
+}
+
+function readPositions(sheet) {
+  const num = (x) => { const n = parseAmount(String(x || '').replace('%', '').replace('+', '')); return isNaN(n) ? null : n; };
+  return [...sheet.querySelectorAll('.pos-edit')].map((row) => {
+    const g = (f) => row.querySelector(`[data-f="${f}"]`).value.trim();
+    return { name: g('name'), type: g('type'), shares: num(g('shares')), value: num(g('value')), pct: num(g('pct')) };
+  }).filter((p) => p.name && p.value != null);
+}
+
 function openNwUpdate() {
   const vt = visibleTxs();
   const series = L.netWorthSeries(vt, S.settings, [currentMonth()]);
+  const pf = latestPortfolio();
+  const start = pf ? pf.positions : [{ type: 'etf' }, { name: 'Cash', type: 'cash' }];
   openSheet({
-    title: 'Waarde beleggingen',
+    title: 'Portefeuille bijwerken',
     body: `
-      <p class="help">Vul de huidige waarde van je BUX-portefeuille in (staat in de BUX-app). Zonder deze waarde telt de app alleen wat je hebt ingelegd.</p>
-      <div class="field"><label for="snapVal">Waarde in euro</label><input id="snapVal" class="input" inputmode="decimal" placeholder="${Math.round(series[0].invest)}"></div>
+      <p class="help">Neem per positie de waarde en het rendement in procenten over uit de BUX-app. Aantal en rendement mag je leeg laten. Bij een volgende keer staan je posities er al, dan pas je alleen de bedragen aan.</p>
       <div class="field"><label for="snapDate">Datum</label><input id="snapDate" class="input" type="date" value="${todayIso()}"></div>
-      <p class="help">Totale inleg tot nu toe: ${eur(series[0].inleg)}.</p>`,
+      <div id="posRows">${start.map(posRowHtml).join('')}</div>
+      <button class="btn quiet small" id="posAdd" type="button" style="margin:4px 0 14px">Positie toevoegen</button>
+      <div class="sumline" id="posTotal"></div>
+      <div class="field"><label for="snapGain">Totaal rendement volgens BUX (optioneel)</label><input id="snapGain" class="input" inputmode="decimal" placeholder="bijv. 660,60">
+        <p class="help">Het groene bedrag bovenaan in BUX. Vul je dit in, dan gebruikt de app dat in plaats van de berekening uit de percentages. Die kan een paar euro afwijken.</p></div>
+      <details class="raw"><summary>Liever alleen het totaal invullen</summary>
+        <div class="field"><label for="snapVal">Totale waarde in euro</label><input id="snapVal" class="input" inputmode="decimal" placeholder="${Math.round(series[0].invest)}"></div>
+        <p class="help">Wordt alleen gebruikt als je hierboven geen posities invult.</p>
+      </details>
+      <p class="help">Totale inleg volgens je bankbestanden en instellingen: ${eur(series[0].inleg)}.</p>`,
     foot: '<button class="btn block" id="snapSave">Opslaan</button>',
     onMount: (sheet) => {
+      const upd = () => {
+        const ps = readPositions(sheet);
+        const total = ps.reduce((a, p) => a + p.value, 0);
+        const gain = portfolioGain(ps);
+        sheet.querySelector('#posTotal').innerHTML = ps.length ? `<span>Totaal ${eur(total)}</span><span>${gain != null ? `${sgn(gain)} rendement` : ''}</span>` : '';
+      };
+      sheet.addEventListener('input', upd);
+      sheet.addEventListener('change', upd);
+      sheet.querySelector('#posAdd').onclick = () => { sheet.querySelector('#posRows').insertAdjacentHTML('beforeend', posRowHtml()); };
+      sheet.querySelector('#posRows').addEventListener('click', (e) => {
+        const b = e.target.closest('[data-posdel]');
+        if (b) { b.closest('.pos-edit').remove(); upd(); }
+      });
+      upd();
       sheet.querySelector('#snapSave').onclick = () => {
-        const v = parseFloat(String(sheet.querySelector('#snapVal').value).replace(/\./g, '').replace(',', '.'));
         const d = sheet.querySelector('#snapDate').value;
-        if (isNaN(v) || !d) { toast('Vul een bedrag en datum in'); return; }
-        S.settings.investSnapshots = [...(S.settings.investSnapshots || []).filter((s) => s.date !== d), { date: d, value: v }];
+        const positions = readPositions(sheet);
+        let value = positions.reduce((a, p) => a + p.value, 0);
+        if (!positions.length) value = parseAmount(sheet.querySelector('#snapVal').value);
+        if (!d || isNaN(value) || (!positions.length && !value)) { toast('Vul posities of een totaal in'); return; }
+        const snap = { date: d, value: Math.round(value * 100) / 100 };
+        const g = parseAmount(String(sheet.querySelector('#snapGain').value || '').replace('+', ''));
+        if (!isNaN(g)) snap.gain = g;
+        if (positions.length) snap.positions = positions;
+        S.settings.investSnapshots = [...(S.settings.investSnapshots || []).filter((x) => x.date !== d), snap];
         markSettings();
         closeSheet();
         render();
-        toast('Waarde opgeslagen');
+        toast('Portefeuille opgeslagen');
       };
     },
   });

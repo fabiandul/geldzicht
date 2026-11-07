@@ -394,3 +394,13 @@ details.raw pre { white-space: pre-wrap; word-break: break-all; background: var(
 .tbl td.r, .tbl th.r { text-align: right; }
 
 .callout { background: var(--warn-bg); border-radius: var(--radius-m); padding: 12px 14px; font-size: 14px; margin: 10px 0 16px; }
+
+/* Portefeuille */
+.pos-row { cursor: default; }
+.pos-row .tx-amt small.pos { color: var(--pos); }
+.pos-edit { border-top: 1px solid var(--line-soft); padding: 12px 0; display: grid; gap: 8px; }
+.pos-top { display: flex; gap: 8px; align-items: center; }
+.pos-top .input { flex: 1; min-width: 0; }
+.pos-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.pos-grid .input, .pos-grid select { padding: 9px 8px; font-size: 14px; min-width: 0; }
+@media (max-width: 420px) { .pos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
