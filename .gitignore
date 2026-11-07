@@ -1,0 +1,10 @@
+# Bankbestanden en back-ups nooit uploaden
+*.TAB
+*.tab
+*.STA
+*.xls
+*.xlsx
+*.csv
+*.json
+!manifest.webmanifest
+.DS_Store
