@@ -1657,6 +1657,8 @@ function onRemote({ months, settings }) {
 
 /* ---------- Inloggen en starten ---------- */
 
+const LOGIN_EMAIL = 'fabian@geldzicht.app'; // vast account, wordt niet getoond
+
 function renderLogin(errMsg = '') {
   $('#app').innerHTML = `
     <div class="login">
@@ -1664,30 +1666,24 @@ function renderLogin(errMsg = '') {
       <h1>${esc(APP_NAME)}</h1>
       <p>Log in om je overzicht te openen.</p>
       <form id="loginForm">
-        <div class="field"><label for="email">E-mail</label><input id="email" class="input" type="email" autocomplete="username" required></div>
+        <div class="field"><label>Wie ben je?</label><div class="input" style="display:flex;align-items:center;font-weight:600">Fabian</div><input type="text" autocomplete="username" value="${LOGIN_EMAIL}" hidden></div>
         <div class="field"><label for="pw">Wachtwoord</label><input id="pw" class="input" type="password" autocomplete="current-password" required></div>
         <div class="err" id="loginErr">${esc(errMsg)}</div>
         <button class="btn block" type="submit">Inloggen</button>
       </form>
-      <p style="margin-top:16px"><button class="link" id="forgot">Wachtwoord vergeten</button></p>
-    </div>`;
+          </div>`;
   $('#loginForm').onsubmit = async (e) => {
     e.preventDefault();
     $('#loginErr').textContent = '';
     try {
-      await S.store.signIn($('#email').value.trim(), $('#pw').value);
+      await S.store.signIn(LOGIN_EMAIL, $('#pw').value);
     } catch (err) {
       const code = err.code || err.message || '';
-      $('#loginErr').textContent = /invalid|wrong|user-not-found|credential/i.test(code) ? 'E-mail of wachtwoord klopt niet.'
+      $('#loginErr').textContent = /invalid|wrong|user-not-found|credential/i.test(code) ? 'Wachtwoord klopt niet.'
         : /network/i.test(code) ? 'Geen verbinding. Controleer je internet en probeer opnieuw.'
         : /too-many/i.test(code) ? 'Te vaak geprobeerd. Wacht even en probeer opnieuw.'
         : `Inloggen mislukt (${code}).`;
     }
-  };
-  $('#forgot').onclick = async () => {
-    const email = $('#email').value.trim();
-    if (!email) { $('#loginErr').textContent = 'Vul eerst je e-mailadres in.'; return; }
-    try { await S.store.resetPassword(email); toast('Mail met resetlink verstuurd'); } catch (err) { $('#loginErr').textContent = err.code || err.message; }
   };
 }
 
