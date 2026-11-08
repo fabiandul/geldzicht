@@ -5,7 +5,7 @@ import { GROUPS, CATEGORIES, GROUP_BY_ID, catInfo, groupOf, UNCATEGORIZED, UNCAT
 import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -540,11 +540,13 @@ function txRow(t, rmap, note, opts = {}) {
   if (t.by === 'gok' && !t.manual) tags.push('<span class="tag">geschat</span>');
   const role = L.accountRole(S.settings, t.account, S.txs);
   if (role === 'spaar') tags.push('<span class="tag">spaarrekening</span>');
+  const tk = L.tikkieInfo(t);
+  if (tk && t.amount > 0 && L.kindOf(t) === 'expense') tags.push('<span class="tag ok">verlaagt uitgaven</span>');
   const voided = t.excluded || k === 'terugbetaling' || (back > 0 && back >= -t.amount - 0.001) || (t.advance && !back);
   const sign = t.amount > 0 ? '+' : '−';
   return `<button class="tx" data-act="tx" data-v="${t.id}">
     <span class="tx-ico" style="background:color-mix(in srgb, ${g.color} 16%, transparent)">${cat.icon}</span>
-    <span class="tx-main"><div class="tx-name">${esc(t.name || 'Onbekend')}</div><div class="tx-sub">${esc(note || cat.name)}${tags.join('')}</div></span>
+    <span class="tx-main"><div class="tx-name">${esc(L.displayName(t) || 'Onbekend')}</div><div class="tx-sub">${esc(note || cat.name)}${tk && tk.person ? esc(`, ${t.amount > 0 ? 'van' : 'aan'} ${tk.person}`) : ''}${tags.join('')}</div></span>
     <span class="tx-amt num ${t.amount > 0 ? 'in' : ''} ${voided ? 'void' : ''}"><span class="amt">${sign}${eur(Math.abs(t.amount))}</span>${opts.noDate ? '' : `<small>${fmtDate(t.date, false)}</small>`}</span>
   </button>`;
 }
@@ -556,7 +558,7 @@ function filteredTxs() {
   const range = f.scope === 'period' ? periodRange() : null;
   const q = L.normalize(f.q).trim();
   let list = visibleTxs().filter((t) => L.inRange(t, range));
-  if (q) list = list.filter((t) => L.normalize(`${t.name} ${t.desc} ${catInfo(t.category).name} ${t.note || ''} ${t.amount.toFixed(2).replace('.', ',')} ${Math.abs(t.amount).toFixed(2)}`).includes(' ' + q) || L.merchantKey(t) === f.q);
+  if (q) list = list.filter((t) => L.normalize(`${L.displayName(t)} ${t.name} ${t.desc} ${catInfo(t.category).name} ${t.note || ''} ${t.amount.toFixed(2).replace('.', ',')} ${Math.abs(t.amount).toFixed(2)}`).includes(' ' + q) || L.merchantKey(t) === f.q);
   if (f.kind === 'out') list = list.filter((t) => t.amount < 0 && L.kindOf(t) === 'expense');
   if (f.kind === 'in') list = list.filter((t) => t.amount > 0 && L.kindOf(t) === 'income');
   if (f.kind === 'transfer') list = list.filter((t) => L.kindOf(t) === 'transfer');
@@ -621,7 +623,7 @@ function renderTransactions() {
         <option value="all" ${f.scope === 'all' ? 'selected' : ''}>Alle perioden</option>
       </select>
     </div>
-    <p class="help" style="margin:8px 2px 0">${list.length} transacties${totalOut ? `, uitgaven ${eur(totalOut)}` : ''}${totalIn ? `, inkomsten ${eur(totalIn)}` : ''}</p>
+    <p class="help" style="margin:8px 2px 0">${list.length} transacties${totalOut > 0 ? `, uitgaven ${eur(totalOut)}` : totalOut < 0 ? `, per saldo ${eur(-totalOut)} terugbetaald` : ''}${totalIn ? `, inkomsten ${eur(totalIn)}` : ''}</p>
     ${list.length ? html : '<div class="empty"><h3>Niets gevonden</h3><p>Pas de zoekterm of filters aan.</p></div>'}
     ${list.length > f.limit ? `<button class="btn ghost more-btn" data-act="tx-more">Meer laden (${list.length - f.limit})</button>` : ''}
   `;
@@ -641,10 +643,11 @@ function openTx(id) {
   const linked = (t.reimbFor || []).map((rid) => S.txs.find((x) => x.id === rid)).filter(Boolean);
   const accLabel = S.settings.accounts?.[t.account]?.label || t.account;
   const role = L.accountRole(S.settings, t.account, S.txs);
-  const byLabel = t.manual ? 'Handmatig' : t.by === 'regel' ? 'Eigen regel' : t.by === 'standaard' ? 'Automatisch herkend' : t.by === 'eigen rekening' ? 'Eigen rekening' : t.by === 'gok' ? 'Geschat' : t.by === 'geleerd' ? 'Geleerd van je eerdere keuzes' : 'Automatisch';
+  const tk = L.tikkieInfo(t);
+  const byLabel = t.by === 'tikkie' && !t.manual ? 'Herkend aan de Tikkie-titel' : t.manual ? 'Handmatig' : t.by === 'regel' ? 'Eigen regel' : t.by === 'standaard' ? 'Automatisch herkend' : t.by === 'eigen rekening' ? 'Eigen rekening' : t.by === 'gok' ? 'Geschat' : t.by === 'geleerd' ? 'Geleerd van je eerdere keuzes' : 'Automatisch';
   const body = `
     <div class="detail-amt num ${t.amount > 0 ? 'pos' : ''}">${t.amount > 0 ? '+' : '−'}${eur(Math.abs(t.amount))}</div>
-    <div class="detail-name">${esc(t.name)}</div>
+    <div class="detail-name">${esc(L.displayName(t))}</div>
     <div class="muted" style="font-size:14px">${fmtDate(t.date)}${t.time ? `, ${t.time.slice(11, 16)}` : ''}</div>
 
     ${k === 'terugbetaling' ? `
@@ -659,6 +662,7 @@ function openTx(id) {
       </button>
     `}
 
+    ${tk && t.amount > 0 && k === 'expense' ? `<div class="callout">Iemand betaalde je terug voor “${esc(tk.title)}”. Dit bedrag verlaagt je uitgaven bij ${esc(cat.name)}, zodat alleen jouw eigen deel meetelt.</div>` : ''}
     ${t.by === 'gok' && !t.manual && k !== 'terugbetaling' ? `<div class="callout">De app herkende ${esc(t.name)} niet en heeft deze categorie geschat. Klopt het? Dan onthoudt de app het voor de volgende keer.<div class="btn-row" style="margin-top:10px"><button class="btn small" data-act="confirm-guess" data-v="${t.id}">Klopt</button><button class="btn quiet small" data-act="pick-cat" data-v="${t.id}">Andere categorie</button></div></div>` : ''}
     ${t.unmatched ? `<div class="callout">Dit lijkt een terugbetaling, maar er is geen uitgave met precies ${eur(t.amount)} gevonden. Koppel hem zelf aan een of meer uitgaven.</div>` : ''}
 
@@ -675,6 +679,7 @@ function openTx(id) {
     <dl class="kv">
       <dt>Rekening</dt><dd>${esc(accLabel)}${role === 'spaar' ? ' (spaarrekening)' : ''}</dd>
       <dt>Soort</dt><dd>${esc(t.type || 'Onbekend')}</dd>
+      ${tk ? `<dt>Tikkie</dt><dd>${esc(tk.title || 'geen titel gevonden')}</dd>${tk.person ? `<dt>${t.amount > 0 ? 'Van' : 'Aan'}</dt><dd>${esc(tk.person)}</dd>` : ''}` : ''}
       ${t.desc ? `<dt>${t.card ? 'Plaats' : 'Omschrijving'}</dt><dd>${esc(t.desc)}</dd>` : ''}
       ${t.iban ? `<dt>Tegenrekening</dt><dd>${esc(t.iban)}</dd>` : ''}
       ${t.balanceAfter != null ? `<dt>Saldo erna</dt><dd class="num">${eur(t.balanceAfter)}</dd>` : ''}
@@ -780,7 +785,7 @@ function openQuickSort() {
     body.insertAdjacentHTML('afterbegin', `
       <div class="progress"><div style="width:${((totalStart - queue.length) / totalStart) * 100}%"></div></div>
       <div class="quick-card">
-        <div class="detail-name">${esc(t.name)}</div>
+        <div class="detail-name">${esc(L.displayName(t))}</div>
         <div class="detail-amt num ${t.amount > 0 ? 'pos' : ''}">${t.amount > 0 ? '+' : '−'}${eur(Math.abs(t.amount))}</div>
         <div class="muted" style="font-size:13.5px">${fmtDate(t.date)}${t.desc ? `, ${esc(t.desc.slice(0, 80))}` : ''}</div>
         <button class="link" style="margin-top:8px" data-act="quick-skip">Overslaan</button>

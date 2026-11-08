@@ -12,8 +12,45 @@ export function normalize(s) {
 
 const GENERIC = new Set(['bv', 'b v', 'nv', 'n v', 'vof', 'via', 'ideal', 'nederland', 'nl', 'the', 'de', 'het', 'van', 'en', 'pas', 'betaalpas']);
 
+// Tikkie: titel en persoon uit de omschrijving halen.
+// Het precieze formaat van ABN is niet bekend, dus dit werkt met de meest waarschijnlijke vormen:
+// "Tikkie ID 000123, pizza avond, Van S de Vries, NL12ABNA0123456789" of "Tikkie ID 0001 pizza avond Van S de Vries".
+export function tikkieInfo(tx) {
+  if (!tx || tx.card) return null;
+  const name = tx.name || '';
+  const desc = tx.desc || '';
+  if (!/tikkie/i.test(name) && !/tikkie/i.test(desc)) return null;
+  let person = '';
+  let m = name.match(/^(.*?)\s+via\s+tikkie/i);
+  if (m && !/\b(aab|abn)\b/i.test(m[1])) person = m[1].trim();
+  if (!person && !/tikkie|\b(aab|abn)\b/i.test(name) && name.trim()) person = name.trim();
+  let d = ' ' + desc + ' ';
+  m = d.match(/[\s,](?:Van|VAN|Aan|AAN)\s+([^,]+?)\s*(?=,|$)/);
+  if (m) { if (!person) person = m[1].trim(); d = d.replace(m[0], ' '); }
+  d = d.replace(/tikkie\s*id\s*:?\s*\d+/gi, ' ')
+    .replace(/\b[A-Z]{2}\d{2}[A-Z]{4}\d{6,}\b/g, ' ')
+    .replace(/\b\d{6,}\b/g, ' ')
+    .replace(/\b(via\s+)?tikkie\b/gi, ' ')
+    .replace(/\b(aab\s+inz|betaalverzoek)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*,\s*/g, ', ')
+    .replace(/(,\s*)+/g, ', ')
+    .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '');
+  person = person.replace(/\s+/g, ' ').replace(/[,.\s]+$/, '');
+  return { title: d.slice(0, 60), person };
+}
+
+// Naam om te tonen: bij een Tikkie de titel in plaats van "AAB INZ TIKKIE".
+export function displayName(tx) {
+  const tk = tikkieInfo(tx);
+  if (!tk) return tx.name || '';
+  if (tk.title) return `Tikkie: ${tk.title}`;
+  return tk.person ? `Tikkie ${tx.amount < 0 ? 'aan' : 'van'} ${tk.person}` : 'Tikkie';
+}
+
 // Een herkenbare sleutel voor een winkel of tegenpartij (zonder filiaalnummers en betaaldiensten).
 export function merchantKey(tx) {
+  if (tikkieInfo(tx)) return ''; // Tikkies gaan over van alles, dus nooit als één winkel onthouden
   let n = (tx.name || '').toLowerCase();
   n = n.replace(/^(sumup|zettle|izettle|ccv|sq|paypal|mollie|adyen|stripe|buckaroo|pay nl|payvision)\s*\*\s*/i, '');
   n = n.replace(/\s+via\s+.*$/, '');
@@ -60,6 +97,12 @@ const HINT_RULES = HINTS.flatMap((h) => {
   const dir = h.dir || cat.dir || (GROUP_BY_ID[cat.group].type === 'income' ? 'in' : 'out');
   return h.words.map((w) => ({ category: h.category, dir, idealOnly: !!h.ideal, k: compileKeyword(w) }));
 });
+
+const NOT_SPEND = new Set(['tikkie-betaald', 'overboeking-persoon', 'overig-uitgave', 'contant', 'bankkosten', 'belasting', 'creditcard', UNCATEGORIZED]);
+function isSpendCat(id) {
+  const c = CAT_BY_ID[id];
+  return !!c && GROUP_BY_ID[c.group].type === 'expense' && !NOT_SPEND.has(id);
+}
 
 const HOUR = (tx) => (tx.time && /T(\d{2})/.test(tx.time) ? Number(tx.time.match(/T(\d{2})/)[1]) : null);
 const TERMINAL = /^(sumup|zettle|izettle|ccv|sq|square|mollie|payvision|worldline|ingenico|myPOS|pin)\b/i;
@@ -117,7 +160,7 @@ export function buildLearned(txs, settings) {
     const sign = t.amount < 0 ? '-' : '+';
     const first = merchantKey(t).split(' ')[0];
     if (first && first.length >= 4 && !stop.has(first)) put(fw, sign + first, t.category);
-    if (t.iban && /Overboeking|Incasso|Periodieke/i.test(t.type || '')) put(iban, sign + t.iban.toUpperCase(), t.category);
+    if (t.iban && /Overboeking|Incasso|Periodieke/i.test(t.type || '') && !tikkieInfo(t)) put(iban, sign + t.iban.toUpperCase(), t.category);
   }
   for (const r of settings.rules || []) {
     if (r.field !== 'name') continue;
@@ -193,6 +236,18 @@ export function categorize(tx, rules, settings) {
   }
   if (isOwnAccount(tx, settings)) return { category: 'sparen', by: 'eigen rekening' };
   const learned = rules.learned || { firstWord: new Map(), iban: new Map() };
+  const tk = tikkieInfo(tx);
+  if (tk) {
+    // Indelen op de titel; een ontvangen Tikkie verlaagt dan de uitgaven in die categorie
+    if (tk.title) {
+      const tt = normalize(tk.title);
+      let best = null;
+      for (const r of rules.defaults) if (!r.k.cardOnly && isSpendCat(r.category) && kwMatches(r.k, tt)) { best = r; break; }
+      if (!best) for (const r of HINT_RULES) if (isSpendCat(r.category) && kwMatches(r.k, tt) && (!best || r.k.len > best.k.len)) best = r;
+      if (best) return { category: best.category, by: 'tikkie' };
+    }
+    return { category: tx.amount < 0 ? 'tikkie-betaald' : 'tikkie-ontvangen', by: 'standaard' };
+  }
   if (tx.iban) {
     const c = learned.iban.get((tx.amount < 0 ? '-' : '+') + tx.iban.toUpperCase());
     if (c) return { category: c, by: 'geleerd' };
@@ -381,8 +436,8 @@ export function summarize(txs, settings, range) {
     const g = catInfo(t.category).group;
     res.byGroup[g] = (res.byGroup[g] || 0) + cost;
     res.byCat[t.category] = (res.byCat[t.category] || 0) + cost;
-    const mk = merchantKey(t) || t.name;
-    if (!res.byMerchant[mk]) res.byMerchant[mk] = { name: t.name, key: mk, total: 0, count: 0, category: t.category };
+    const mk = merchantKey(t) || displayName(t);
+    if (!res.byMerchant[mk]) res.byMerchant[mk] = { name: displayName(t), key: mk, total: 0, count: 0, category: t.category };
     res.byMerchant[mk].total += cost;
     res.byMerchant[mk].count += 1;
     if (GROUP_BY_ID[g]?.fixed) res.fixed += cost; else res.variable += cost;
