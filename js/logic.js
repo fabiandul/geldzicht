@@ -1,10 +1,11 @@
 // Indelen, voorschieten koppelen en berekeningen.
-import { CATEGORIES, CAT_BY_ID, GROUP_BY_ID, UNCATEGORIZED, UNCATEGORIZED_IN, catInfo } from './categories.js';
+import { CATEGORIES, CAT_BY_ID, GROUP_BY_ID, HINTS, UNCATEGORIZED, UNCATEGORIZED_IN, catInfo } from './categories.js';
 
 export function normalize(s) {
   return ' ' + String(s || '')
     .toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/([a-z])(\d)/g, '$1 $2').replace(/(\d)([a-z])/g, '$1 $2')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim() + ' ';
 }
@@ -26,13 +27,109 @@ function compileKeyword(kw) {
   if (kw.startsWith('card:')) { cardOnly = true; kw = kw.slice(5); }
   const prefix = kw.endsWith('*');
   const base = normalize(kw.replace(/\*$/, '')).trim();
-  return { base, prefix, cardOnly, len: base.length };
+  // "albert heijn" ook vinden als "ALBERTHEIJN" aan elkaar staat
+  const compact = base.includes(' ') && base.replace(/ /g, '').length >= 7 ? base.replace(/ /g, '') : null;
+  return { base, prefix, cardOnly, compact, len: base.length };
 }
 
 function kwMatches(k, text) {
   if (!k.base) return false;
-  if (k.prefix) return text.includes(' ' + k.base);
-  return text.includes(' ' + k.base + ' ');
+  if (k.prefix ? text.includes(' ' + k.base) : text.includes(' ' + k.base + ' ')) return true;
+  return !!k.compact && text.replace(/ /g, '').includes(k.compact);
+}
+
+const COMPANY = /\b(b ?v|n ?v|v ?o ?f|gmbh|ltd|limited|inc|llc|plc|s ?a|s ?l|s ?r ?l|ag|ab|se|sarl|bvba|stichting|vereniging|holding|groep|group|bank|nederland|netherlands|international|services|payments|company|co)\b/;
+const PERSON_TITLE = /^(hr|dhr|mw|mevr|mr|mrs|ms|fam|familie|de heer|mevrouw|heer)\b/;
+
+// Lijkt de naam op een persoon (bijv. "J EN M JANSEN", "F DULMERS", "Hr P de Vries")?
+export function looksLikePerson(name) {
+  const raw = String(name || '').trim();
+  if (!raw || /\d/.test(raw) || /[@*]|www|\.com|\.nl/i.test(raw)) return false;
+  const n = normalize(raw).trim();
+  if (COMPANY.test(n)) return false;
+  if (PERSON_TITLE.test(n)) return true;
+  const words = n.split(' ');
+  if (words.length > 6) return false;
+  if (words.some((w) => w.length === 1)) return true; // voorletters
+  if (/\b(en|of|e o)\b/.test(n) && words.length <= 6) return true;
+  return words.length >= 2 && words.length <= 4;
+}
+
+const HINT_RULES = HINTS.flatMap((h) => {
+  const cat = CAT_BY_ID[h.category];
+  const dir = h.dir || cat.dir || (GROUP_BY_ID[cat.group].type === 'income' ? 'in' : 'out');
+  return h.words.map((w) => ({ category: h.category, dir, idealOnly: !!h.ideal, k: compileKeyword(w) }));
+});
+
+const HOUR = (tx) => (tx.time && /T(\d{2})/.test(tx.time) ? Number(tx.time.match(/T(\d{2})/)[1]) : null);
+const TERMINAL = /^(sumup|zettle|izettle|ccv|sq|square|mollie|payvision|worldline|ingenico|myPOS|pin)\b/i;
+
+// Schat een categorie als niets anders past. Liever een redelijke gok dan "nog niet ingedeeld".
+function guess(tx, learned) {
+  const nameText = normalize(tx.name);
+  const text = tx.card ? nameText : normalize(`${tx.name} ${tx.desc}`);
+  const sign = tx.amount < 0 ? '-' : '+';
+  // 1. Geleerd van eerdere keuzes: zelfde eerste woord van de naam
+  const key = merchantKey(tx);
+  const first = key.split(' ')[0];
+  if (first && first.length >= 4) {
+    const c = learned.firstWord.get(sign + first);
+    if (c) return { category: c, by: 'geleerd' };
+  }
+  // 2. Woorden die iets zeggen over de soort zaak; het langste woord wint
+  let best = null;
+  for (const r of HINT_RULES) {
+    if (!dirOk(r.dir, tx.amount)) continue;
+    if (r.idealOnly && !/iDEAL/i.test(tx.type)) continue;
+    if (kwMatches(r.k, text) && (!best || r.k.len > best.k.len)) best = r;
+  }
+  if (best) return { category: best.category, by: 'gok' };
+  const abs = Math.abs(tx.amount);
+  const hour = HOUR(tx);
+  // 3. Op basis van het soort betaling
+  if (tx.amount < 0) {
+    if (tx.card) {
+      if (hour != null && (hour >= 22 || hour < 5)) return { category: 'kroeg', by: 'gok' };
+      if (abs <= 6) return { category: 'koffie', by: 'gok' };
+      if (TERMINAL.test(tx.name || '')) return { category: hour != null && hour >= 16 ? 'restaurant' : 'koffie', by: 'gok' };
+      if (abs >= 150) return { category: 'warenhuis', by: 'gok' };
+      return { category: 'overig-uitgave', by: 'gok' };
+    }
+    if (/iDEAL/i.test(tx.type)) return { category: 'online', by: 'gok' };
+    if (/Incasso/i.test(tx.type)) return { category: 'abonnement-overig', by: 'gok' };
+    if (/Overboeking|Periodieke/i.test(tx.type)) {
+      return looksLikePerson(tx.name) ? { category: 'overboeking-persoon', by: 'auto' } : { category: 'overig-uitgave', by: 'gok' };
+    }
+    return { category: 'overig-uitgave', by: 'gok' };
+  }
+  if (/Overboeking|iDEAL/i.test(tx.type) && looksLikePerson(tx.name)) return { category: 'ontvangen-persoon', by: 'gok' };
+  return { category: 'overig-inkomen', by: 'gok' };
+}
+
+// Leert van handmatige keuzes: eerste woord van de naam en IBAN, per richting (in of uit).
+export function buildLearned(txs, settings) {
+  const fw = new Map();
+  const iban = new Map();
+  const put = (map, k, c) => { if (!map.has(k)) map.set(k, c); else if (map.get(k) !== c) map.set(k, null); };
+  const stop = new Set(HINT_RULES.map((r) => r.k.base).concat(['cafe', 'restaurant', 'hotel', 'shop', 'store', 'online', 'kiosk', 'station', 'markt', 'super', 'food', 'grand', 'city', 'centrum', 'nederland', 'holland', 'amsterdam', 'rotterdam', 'utrecht', 'haarlem', 'alkmaar']));
+  for (const t of txs) {
+    if (!t.manual || !t.category || t.category.startsWith('onbekend') || (t.reimbFor && t.reimbFor.length) || t.category === 'terugbetaling') continue;
+    const sign = t.amount < 0 ? '-' : '+';
+    const first = merchantKey(t).split(' ')[0];
+    if (first && first.length >= 4 && !stop.has(first)) put(fw, sign + first, t.category);
+    if (t.iban && /Overboeking|Incasso|Periodieke/i.test(t.type || '')) put(iban, sign + t.iban.toUpperCase(), t.category);
+  }
+  for (const r of settings.rules || []) {
+    if (r.field !== 'name') continue;
+    const first = normalize(r.pattern).trim().split(' ')[0];
+    const cat = CAT_BY_ID[r.category];
+    if (!cat || !first || first.length < 4 || stop.has(first)) continue;
+    const dir = r.dir || cat.dir || (GROUP_BY_ID[cat.group].type === 'income' ? 'in' : '');
+    if (dir !== 'in') put(fw, '-' + first, r.category);
+    if (dir !== 'out') put(fw, '+' + first, r.category);
+  }
+  for (const m of [fw, iban]) for (const [k, v] of m) if (v == null) m.delete(k);
+  return { firstWord: fw, iban };
 }
 
 // Bouwt de regels: eigen regels eerst (op volgorde), daarna standaardregels op lengte.
@@ -95,6 +192,11 @@ export function categorize(tx, rules, settings) {
     if (kwMatches(r.k, r.field === 'name' ? normalize(tx.name) : fullText)) return { category: r.category, by: 'regel' };
   }
   if (isOwnAccount(tx, settings)) return { category: 'sparen', by: 'eigen rekening' };
+  const learned = rules.learned || { firstWord: new Map(), iban: new Map() };
+  if (tx.iban) {
+    const c = learned.iban.get((tx.amount < 0 ? '-' : '+') + tx.iban.toUpperCase());
+    if (c) return { category: c, by: 'geleerd' };
+  }
   if (tx.type === 'GEA') return { category: 'contant', by: 'auto' };
   if (tx.type === 'Bankkosten') return { category: tx.amount < 0 ? 'bankkosten' : 'rente', by: 'auto' };
   if (tx.type === 'Rente') return { category: 'rente', by: 'auto' };
@@ -108,6 +210,7 @@ export function categorize(tx, rules, settings) {
       if (kwMatches(r.k, t)) return { category: r.category, by: 'standaard' };
     }
   }
+  if (settings.smartGuess !== false) return guess(tx, learned);
   if (tx.amount > 0) return { category: UNCATEGORIZED_IN, by: 'auto' };
   if (/Overboeking/i.test(tx.type) && !tx.card) return { category: 'overboeking-persoon', by: 'auto' };
   return { category: UNCATEGORIZED, by: 'auto' };
@@ -125,8 +228,9 @@ export function kindOf(tx) {
 // Past regels toe op alle transacties die niet handmatig zijn ingedeeld.
 export function applyRules(txs, settings) {
   const rules = buildRules(settings);
+  rules.learned = buildLearned(txs, settings);
   for (const tx of txs) {
-    if (tx.reimbFor && tx.reimbFor.length) { tx.category = 'terugbetaling'; continue; }
+    if (tx.reimbFor && tx.reimbFor.length) { tx.category = 'terugbetaling'; tx.by = 'koppeling'; continue; }
     if (tx.manual) continue;
     const r = categorize(tx, rules, settings);
     tx.category = r.category;
@@ -192,10 +296,12 @@ export function autoMatchReimbursements(txs, settings) {
       inc.reimbFor = pick.map((e) => e.id);
       inc.autoMatched = true;
       inc.category = 'terugbetaling';
+      inc.by = 'koppeling';
       pick.forEach((e) => used.add(e.id));
       results.push({ incoming: inc, expenses: pick });
     } else if (!inc.manual) {
       inc.category = 'terugbetaling';
+      inc.by = 'koppeling';
       inc.unmatched = true;
     }
   }

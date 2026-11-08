@@ -87,7 +87,7 @@ export const CATEGORIES = [
 
   // Uitgaan
   { id: 'kroeg', group: 'uitgaan', name: 'Kroeg en bar', icon: '🍺', kw: ['cafe', 'bar', 'kroeg', 'pub', 'irish pub', 'proeflokaal', 'brouwerij', 'tapperij', 'biercafe', 'cocktail*', 'lounge', 'grand cafe', 'strandtent', 'beachclub'] },
-  { id: 'feest', group: 'uitgaan', name: 'Feesten en festivals', icon: '🎶', kw: ['paylogic', 'ticketmaster', 'eventbrite', 'see tickets', 'ticketswap', 'eventix', 'tibbaa', 'yourticketprovider', 'ticketkantoor', 'festival*', 'club', 'discotheek', 'ziggo dome', 'afas live', 'johan cruijff arena', 'melkweg', 'paradiso', 'tivoli', 'gelredome', 'ahoy', 'mysteryland', 'awakenings', 'dgtl', 'lowlands', 'pinkpop', 'defqon', 'qdance', 'q dance', 'id t', 'ticketcounter', 'guts tickets', 'weeztix'] },
+  { id: 'feest', group: 'uitgaan', name: 'Feesten en festivals', icon: '🎶', kw: ['paylogic', 'ticketmaster', 'eventbrite', 'see tickets', 'ticketswap', 'eventix', 'tibbaa', 'yourticketprovider', 'ticketkantoor', 'festival*', 'discotheek', 'ziggo dome', 'afas live', 'johan cruijff arena', 'melkweg', 'paradiso', 'tivoli', 'gelredome', 'ahoy', 'mysteryland', 'awakenings', 'dgtl', 'lowlands', 'pinkpop', 'defqon', 'qdance', 'q dance', 'id t', 'ticketcounter', 'guts tickets', 'weeztix'] },
   { id: 'bioscoop', group: 'uitgaan', name: 'Bioscoop en theater', icon: '🎬', kw: ['pathe', 'vue', 'kinepolis', 'filmhuis', 'bioscoop', 'cinema', 'theater', 'schouwburg', 'concertgebouw', 'stage entertainment', 'ntk', 'comedy*', 'boom chicago'] },
 
   // Reizen
@@ -114,6 +114,7 @@ export const CATEGORIES = [
   { id: 'tikkie-betaald', group: 'overig', name: 'Tikkies betaald', icon: '🤝', dir: 'out', kw: ['tikkie', 'aab inz tikkie', 'betaalverzoek', 'wero betaalverzoek'] },
   { id: 'goededoelen', group: 'overig', name: 'Goede doelen', icon: '❤️', dir: 'out', kw: ['kwf', 'rode kruis', 'unicef', 'artsen zonder grenzen', 'greenpeace', 'wnf', 'wereld natuur fonds', 'amnesty', 'hartstichting', 'nierstichting', 'longfonds', 'alzheimer', 'stichting vluchteling', 'giro555', 'warchild', 'war child', 'plan nederland', 'natuurmonumenten', 'staatsbosbeheer', 'collecte', 'donatie', 'gift'] },
   { id: 'huisdieren', group: 'overig', name: 'Huisdieren', icon: '🐾', kw: ['pets place', 'jumper', 'discus', 'zooplus', 'dierenarts*', 'dierenkliniek', 'dierenspeciaalzaak', 'ranzijn dier', 'petsplace', 'medpets', 'brekz', 'bitiba'] },
+  { id: 'opleiding', group: 'overig', name: 'Opleiding en cursussen', icon: '🎓', dir: 'out', kw: ['rijschool', 'rijles*', 'cbr', 'cursus*', 'opleiding*', 'studieboeken', 'hogeschool', 'universiteit', 'examen*', 'lesgeld', 'collegegeld', 'studiekosten', 'inholland'] },
   { id: 'overboeking-persoon', group: 'overig', name: 'Betaald aan personen', icon: '👤', dir: 'out', kw: [] },
   { id: 'overig-uitgave', group: 'overig', name: 'Overige uitgaven', icon: '📦', dir: 'out', kw: [] },
   { id: UNCATEGORIZED, group: 'overig', name: 'Nog niet ingedeeld', icon: '❔', dir: 'out', kw: [] },
@@ -126,6 +127,7 @@ export const CATEGORIES = [
   { id: 'tikkie-ontvangen', group: 'inkomen', name: 'Tikkies ontvangen', icon: '🤝', dir: 'in', kw: ['tikkie', 'aab inz tikkie', 'betaalverzoek'] },
   { id: 'verkoop', group: 'inkomen', name: 'Verkopen', icon: '🏷️', dir: 'in', kw: ['marktplaats', 'vinted', 'ebay', 'bol com partner', 'catawiki', '2dehands', 'tweedehands'] },
   { id: 'terugbetaling', group: 'inkomen', name: 'Terugbetalingen', icon: '↩️', dir: 'in', kw: [] },
+  { id: 'ontvangen-persoon', group: 'inkomen', name: 'Ontvangen van personen', icon: '👤', dir: 'in', kw: [] },
   { id: 'cadeau-ontvangen', group: 'inkomen', name: 'Geld gekregen', icon: '🎁', dir: 'in', kw: ['verjaardag', 'kerstcadeau', 'sinterklaas', 'cadeautje'] },
   { id: 'overig-inkomen', group: 'inkomen', name: 'Overige inkomsten', icon: '💶', dir: 'in', kw: [] },
   { id: UNCATEGORIZED_IN, group: 'inkomen', name: 'Nog niet ingedeeld', icon: '❔', dir: 'in', kw: [] },
@@ -146,3 +148,52 @@ export function catInfo(id) {
 export function groupOf(catId) {
   return GROUP_BY_ID[catInfo(catId).group];
 }
+
+// Hints: woorden die iets zeggen over de soort zaak (bijvoorbeeld "Pizzeria Napoli" of "Hotel Zonneveld").
+// Worden pas gebruikt als geen winkelnaam herkend is. Het resultaat is een schatting.
+export const HINTS = [
+  { category: 'supermarkt', words: ['supermarkt*', 'supermarket*', 'super', 'minimarkt', 'minimarket', 'toko', 'boodschappen', 'groceries', 'grocery', 'carrefour', 'intermarche', 'rewe', 'edeka', 'mercadona', 'conad', 'migros', 'tesco', 'sainsbury*', 'delhaize', 'colruyt', 'kaufland', 'penny', 'netto', 'billa'] },
+  { category: 'fastfood', words: ['snack*', 'friet*', 'frites', 'patat*', 'burger*', 'chicken', 'kip', 'foodtruck', 'food truck', 'grillroom', 'doner*', 'kebab*', 'shoarma*', 'pita', 'falafel'] },
+  { category: 'restaurant', words: ['restaurant*', 'resto', 'eetcafe', 'eethuis', 'bistro', 'brasserie', 'trattoria', 'osteria', 'ristorante', 'pizza*', 'sushi*', 'ramen', 'noodle*', 'wok', 'thai', 'indian', 'indiaas', 'mexican*', 'taco*', 'tapas', 'grill', 'steak*', 'diner', 'dinner', 'kitchen', 'keuken', 'food', 'foods', 'pannenkoek*', 'pancake*', 'poke', 'dim sum', 'asian', 'aziatisch', 'oriental', 'gastro*', 'eatery', 'eten'] },
+  { category: 'koffie', words: ['coffee*', 'koffie*', 'espresso*', 'cappuccino', 'lunch*', 'broodje*', 'sandwich*', 'bagel*', 'tea', 'thee', 'tearoom', 'ijs', 'ijssalon', 'gelato*', 'ice cream', 'patisserie', 'cafeteria', 'kantine', 'canteen', 'automaat', 'vending', 'selecta', 'smoothie*', 'juice'] },
+  { category: 'kroeg', words: ['bar', 'pub', 'cafe', 'kroeg', 'bier*', 'beer*', 'brouwerij', 'brewery', 'brewing', 'cocktail*', 'lounge', 'wijnbar', 'wine bar', 'paviljoen', 'strandpaviljoen', 'beachclub', 'beach club', 'nightclub', 'disco*', 'borrel*', 'taverne', 'herberg', 'proeverij'] },
+  { category: 'brandstof', words: ['tank*', 'benzine', 'diesel', 'fuel', 'petrol', 'gas station', 'laadpaal', 'laadsessie', 'laden', 'charging', 'charge*', 'ev', 'tankpas'] },
+  { category: 'parkeren', words: ['parkeer*', 'parkeren', 'parking', 'parkhaus', 'parcheggio', 'garage parking'] },
+  { category: 'ov', words: ['trein', 'train*', 'bus', 'metro', 'tram', 'ferry', 'veerboot', 'veerpont', 'pont', 'rail*', 'ov'] },
+  { category: 'taxi', words: ['taxi*', 'cab', 'rideshare', 'scooter*'] },
+  { category: 'kleding', words: ['fashion*', 'mode', 'modehuis', 'kleding*', 'clothing', 'apparel', 'jeans', 'denim', 'menswear', 'herenmode', 'boutique', 'streetwear', 'outfit*', 'wear'] },
+  { category: 'kapper', words: ['hair*', 'barber*', 'kapper*', 'kapsalon', 'haar*', 'coiffeur', 'coiffure'] },
+  { category: 'verzorging', words: ['nagel*', 'nails', 'beauty*', 'schoonheid*', 'cosmetic*', 'cosmetica', 'parfum*', 'perfume*', 'skin*', 'massage*', 'tattoo*', 'piercing*'] },
+  { category: 'sportschool', words: ['gym*', 'fitness*', 'sportschool', 'crossfit', 'yoga*', 'pilates', 'boulder*', 'klim*', 'zwembad', 'swim*', 'padel*', 'tennis*', 'squash', 'sportcentrum', 'sportpark', 'sporthal'] },
+  { category: 'hobby', words: ['zoo', 'dierentuin', 'pretpark', 'attractiepark', 'waterpark', 'sauna*', 'wellness*', 'spa', 'thermen', 'museum*', 'expositie', 'tentoonstelling', 'escape*', 'karting', 'bowling', 'lasergam*', 'arcade', 'speelhal', 'minigolf', 'midgetgolf', 'golf*', 'kart*', 'jump*', 'trampoline*', 'paintball', 'skiles', 'surf*', 'kitesurf*', 'zeil*', 'sloep*', 'kano*', 'fiets verhuur', 'fietsverhuur'] },
+  { category: 'feest', words: ['ticket*', 'tickets', 'festival*', 'concert*', 'event*', 'evenement*', 'entree', 'entrance', 'kassa'] },
+  { category: 'bioscoop', words: ['cinema*', 'bioscoop', 'film*', 'theater*', 'theatre', 'schouwburg', 'musical*', 'comedy', 'cabaret'] },
+  { category: 'verblijf', words: ['hotel*', 'hostel*', 'resort*', 'apartment*', 'appartement*', 'apartamento*', 'vakantiepark', 'vakantiehuis', 'bungalow*', 'lodge', 'camping*', 'motel', 'pension', 'guesthouse', 'b b', 'inn', 'suites'] },
+  { category: 'vliegen', words: ['airline*', 'airways', 'flight*', 'vlucht*'] },
+  { category: 'vakantie', words: ['souvenir*', 'duty free', 'dutyfree', 'excursie*', 'tour', 'tours', 'reisbureau', 'travel*'] },
+  { category: 'elektronica', words: ['electronic*', 'elektronica', 'computer*', 'laptop*', 'telefoonwinkel', 'phone*', 'apple', 'gadget*', 'tech'] },
+  { category: 'online', words: ['webshop*', 'webwinkel', 'online', 'shop', 'store', 'bestelling', 'order', 'bestelnummer', 'ordernummer', 'www', 'com', 'nl'], dir: 'out', ideal: true },
+  { category: 'warenhuis', words: ['bazaar', 'bazar', 'huishoud*', 'woonwinkel', 'warenhuis', 'department store', 'euroshop', 'dollar*', 'kringloop*', 'tweedehands', 'thrift', 'markthal'] },
+  { category: 'sportwinkel', words: ['sportwinkel', 'sportshop', 'sports', 'outdoor', 'running', 'bike', 'cycling'] },
+  { category: 'boeken', words: ['books', 'book', 'boekwinkel', 'tijdschrift*', 'krant', 'magazine*', 'stripwinkel', 'comics'] },
+  { category: 'cadeaus', words: ['flower*', 'florist', 'bloemist', 'bloemen*', 'cadeau*', 'kado*', 'gift*', 'speelgoed*', 'toys', 'toy'] },
+  { category: 'inrichting', words: ['meubel*', 'furniture', 'interieur*', 'wonen', 'woonwinkel', 'living', 'beddenwinkel', 'matras*', 'gordijn*', 'verlichting', 'lamp*', 'deco*'] },
+  { category: 'klussen', words: ['tuin*', 'bouwmarkt', 'verf*', 'ijzerwaren', 'gereedschap', 'hout*', 'doe het zelf', 'diy', 'hardware'] },
+  { category: 'auto', words: ['garage', 'autoservice', 'autobedrijf', 'banden*', 'bandenservice', 'apk', 'car', 'cars', 'auto*', 'wasstraat', 'carwash', 'car wash', 'pechhulp'] },
+  { category: 'apotheek', words: ['pharma*', 'farmacia', 'pharmacie', 'apotheek', 'apotheke'] },
+  { category: 'zorg', words: ['dental', 'dentist', 'tandarts*', 'kliniek', 'clinic', 'medisch*', 'medical', 'praktijk', 'therapie*', 'therapeut*', 'zorg', 'gezondheid*', 'health*', 'ziekenhuis'] },
+  { category: 'opticien', words: ['optiek', 'optical', 'optician', 'brillen*', 'lens', 'lenzen'] },
+  { category: 'huisdieren', words: ['dierenwinkel', 'dierenspeciaal*', 'petshop', 'pet shop', 'dierenarts*', 'dierenkliniek', 'trimsalon', 'hondenschool', 'hondenuitlaat*'] },
+  { category: 'games', words: ['game*', 'gaming', 'esports', 'console*', 'playstation', 'nintendo', 'xbox'] },
+  { category: 'gokken', words: ['casino*', 'loterij*', 'lottery', 'lotto', 'poker', 'bingo', 'wedden', 'sportsbook', 'gokken'] },
+  { category: 'abonnement-overig', words: ['abonnement*', 'subscription*', 'membership', 'lidmaatschap*', 'maandbedrag', 'maandelijks', 'monthly', 'jaarabonnement', 'premium', 'contributie'] },
+  { category: 'verzekering', words: ['verzekering*', 'insurance', 'assurantie*', 'polis*', 'premie'] },
+  { category: 'goededoelen', words: ['donatie*', 'donation*', 'doneren', 'collecte', 'goed doel', 'foundation', 'fonds', 'kerk', 'parochie', 'moskee'] },
+  { category: 'opleiding', words: ['school', 'academie', 'academy', 'cursus*', 'course*', 'opleiding*', 'training*', 'workshop*', 'studie*', 'lessen', 'examen*'] },
+  { category: 'kostgeld', words: ['kostgeld', 'kost en inwoning', 'huishoudgeld', 'huishoudpot'], dir: 'out' },
+  { category: 'huur', words: ['huur', 'rent', 'kamerhuur', 'servicekosten'], dir: 'out' },
+  { category: 'cadeau-ontvangen', words: ['verjaardag*', 'jarig', 'cadeau*', 'kado*', 'sinterklaas', 'kerst*', 'gefeliciteerd', 'birthday'], dir: 'in' },
+  { category: 'tikkie-ontvangen', words: ['tikkie*', 'betaalverzoek*', 'terug', 'terugbetaling', 'voorgeschoten', 'mijn deel', 'jouw deel', 'deel'], dir: 'in' },
+  { category: 'verkoop', words: ['verkoop', 'verkocht', 'koper', 'sold'], dir: 'in' },
+  { category: 'salaris', words: ['salaris*', 'loon*', 'salary', 'payroll', 'wage*', 'uitbetaling uren', 'uren'], dir: 'in' },
+];

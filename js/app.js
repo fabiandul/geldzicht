@@ -5,7 +5,7 @@ import { GROUPS, CATEGORIES, GROUP_BY_ID, catInfo, groupOf, UNCATEGORIZED, UNCAT
 import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -391,6 +391,7 @@ function renderOverview() {
   const inPeriod = vt.filter((t) => t.account === main && L.inRange(t, range));
   const uncategorized = inPeriod.filter((t) => t.category === UNCATEGORIZED || t.category === UNCATEGORIZED_IN).length;
   const unmatched = vt.filter((t) => t.unmatched).length;
+  const guessed = inPeriod.filter((t) => t.by === 'gok' && !t.manual && !t.excluded).length;
   const net = splitEur(s.net);
   const moved = s.saved + s.invested;
 
@@ -429,6 +430,7 @@ function renderOverview() {
     </section>
 
     ${uncategorized ? `<button class="banner" data-act="quick"><div><b>${uncategorized} ${uncategorized === 1 ? 'transactie' : 'transacties'} nog niet ingedeeld</b><span>Deel ze in, dan onthoudt de app het voor de volgende keer.</span></div><span class="go">Indelen</span></button>` : ''}
+    ${guessed ? `<button class="banner" data-act="guesses"><div><b>${guessed} ${guessed === 1 ? 'transactie' : 'transacties'} geschat ingedeeld</b><span>Niet herkend, dus de app heeft een categorie gegokt. Bevestig of verbeter ze, dan weet de app het zeker.</span></div><span class="go">Nalopen</span></button>` : ''}
     ${unmatched ? `<button class="banner" data-act="unmatched"><div><b>${unmatched} ${unmatched === 1 ? 'terugbetaling' : 'terugbetalingen'} niet gekoppeld</b><span>Geen uitgave met precies dat bedrag gevonden. Koppel ze zelf.</span></div><span class="go">Bekijken</span></button>` : ''}
 
     <section>
@@ -535,6 +537,7 @@ function txRow(t, rmap, note, opts = {}) {
   if (back > 0) tags.push(`<span class="tag ok">${back >= -t.amount - 0.001 ? 'terugbetaald' : eur(back) + ' terug'}</span>`);
   if (t.excluded) tags.push('<span class="tag">telt niet mee</span>');
   if (t.unmatched) tags.push('<span class="tag acc">niet gekoppeld</span>');
+  if (t.by === 'gok' && !t.manual) tags.push('<span class="tag">geschat</span>');
   const role = L.accountRole(S.settings, t.account, S.txs);
   if (role === 'spaar') tags.push('<span class="tag">spaarrekening</span>');
   const voided = t.excluded || k === 'terugbetaling' || (back > 0 && back >= -t.amount - 0.001) || (t.advance && !back);
@@ -559,6 +562,7 @@ function filteredTxs() {
   if (f.kind === 'transfer') list = list.filter((t) => L.kindOf(t) === 'transfer');
   if (f.kind === 'todo') list = list.filter((t) => t.category === UNCATEGORIZED || t.category === UNCATEGORIZED_IN);
   if (f.kind === 'advance') list = list.filter((t) => t.advance || (t.reimbFor && t.reimbFor.length) || t.unmatched);
+  if (f.kind === 'guess') list = list.filter((t) => t.by === 'gok' && !t.manual);
   if (f.cat.startsWith('g:')) list = list.filter((t) => catInfo(t.category).group === f.cat.slice(2));
   if (f.cat.startsWith('c:')) list = list.filter((t) => t.category === f.cat.slice(2));
   const sorters = {
@@ -603,7 +607,7 @@ function renderTransactions() {
   return `
     <div class="search"><span aria-hidden="true">⌕</span><input id="txSearch" type="search" placeholder="Zoek op naam, omschrijving of bedrag" value="${esc(f.q)}" autocomplete="off"></div>
     <div class="chips" style="padding:2px 0 8px">
-      ${[['all', 'Alles'], ['out', 'Uitgaven'], ['in', 'Inkomsten'], ['transfer', 'Sparen en beleggen'], ['todo', 'Niet ingedeeld'], ['advance', 'Voorgeschoten']].map(([k, l]) => `<button class="chip ${f.kind === k ? 'on' : ''}" data-act="tx-kind" data-v="${k}">${l}</button>`).join('')}
+      ${[['all', 'Alles'], ['out', 'Uitgaven'], ['in', 'Inkomsten'], ['transfer', 'Sparen en beleggen'], ['todo', 'Niet ingedeeld'], ['guess', 'Geschat'], ['advance', 'Voorgeschoten']].map(([k, l]) => `<button class="chip ${f.kind === k ? 'on' : ''}" data-act="tx-kind" data-v="${k}">${l}</button>`).join('')}
     </div>
     <div class="toolbar">
       <select id="txCat" aria-label="Categorie">${catOptions(f.cat)}</select>
@@ -637,7 +641,7 @@ function openTx(id) {
   const linked = (t.reimbFor || []).map((rid) => S.txs.find((x) => x.id === rid)).filter(Boolean);
   const accLabel = S.settings.accounts?.[t.account]?.label || t.account;
   const role = L.accountRole(S.settings, t.account, S.txs);
-  const byLabel = t.manual ? 'Handmatig' : t.by === 'regel' ? 'Eigen regel' : t.by === 'standaard' ? 'Automatisch herkend' : t.by === 'eigen rekening' ? 'Eigen rekening' : 'Automatisch';
+  const byLabel = t.manual ? 'Handmatig' : t.by === 'regel' ? 'Eigen regel' : t.by === 'standaard' ? 'Automatisch herkend' : t.by === 'eigen rekening' ? 'Eigen rekening' : t.by === 'gok' ? 'Geschat' : t.by === 'geleerd' ? 'Geleerd van je eerdere keuzes' : 'Automatisch';
   const body = `
     <div class="detail-amt num ${t.amount > 0 ? 'pos' : ''}">${t.amount > 0 ? '+' : '−'}${eur(Math.abs(t.amount))}</div>
     <div class="detail-name">${esc(t.name)}</div>
@@ -655,6 +659,7 @@ function openTx(id) {
       </button>
     `}
 
+    ${t.by === 'gok' && !t.manual && k !== 'terugbetaling' ? `<div class="callout">De app herkende ${esc(t.name)} niet en heeft deze categorie geschat. Klopt het? Dan onthoudt de app het voor de volgende keer.<div class="btn-row" style="margin-top:10px"><button class="btn small" data-act="confirm-guess" data-v="${t.id}">Klopt</button><button class="btn quiet small" data-act="pick-cat" data-v="${t.id}">Andere categorie</button></div></div>` : ''}
     ${t.unmatched ? `<div class="callout">Dit lijkt een terugbetaling, maar er is geen uitgave met precies ${eur(t.amount)} gevonden. Koppel hem zelf aan een of meer uitgaven.</div>` : ''}
 
     <div style="margin-top:8px">
@@ -1267,6 +1272,7 @@ function openRules() {
     title: 'Eigen regels',
     body: `
       <p class="help">Regels gaan voor op de automatische herkenning. Ze worden ook gemaakt als je bij het indelen “Onthoud” aan laat staan.</p>
+      <label class="toggle-row" style="border:none"><span class="txt">Onbekende transacties schatten<small>Gebruikt woorden in de naam, het soort betaling en het tijdstip om een categorie te gokken. Uit: ze blijven “nog niet ingedeeld”.</small></span><span class="switch"><input type="checkbox" id="smartGuess" ${S.settings.smartGuess !== false ? 'checked' : ''}><span></span></span></label>
       <div class="field"><label for="ruleText">Als de naam of omschrijving bevat</label><input id="ruleText" class="input" placeholder="bijvoorbeeld zalando of foodtruck bertus"></div>
       <div class="toolbar">
         <select id="ruleField" aria-label="Waar zoeken"><option value="any">Naam of omschrijving</option><option value="name">Alleen naam</option><option value="iban">Tegenrekening (IBAN)</option></select>
@@ -1275,6 +1281,12 @@ function openRules() {
       <button class="btn block" id="ruleAdd" style="margin:6px 0 16px">Regel toevoegen</button>
       <div id="ruleList">${rules.map((r, i) => `<div class="list-item"><span class="grow"><b>${esc(r.pattern)}</b><br><small class="muted">${r.field === 'iban' ? 'IBAN' : r.field === 'name' ? 'naam' : 'naam of omschrijving'} naar ${catInfo(r.category).icon} ${esc(catInfo(r.category).name)}</small></span><button class="x-btn" data-del="${i}" aria-label="Verwijder regel">✕</button></div>`).join('') || '<p class="muted">Nog geen eigen regels.</p>'}</div>`,
     onMount: (sheet) => {
+      sheet.querySelector('#smartGuess').onchange = (e) => {
+        S.settings.smartGuess = e.target.checked;
+        markSettings();
+        const r = recompute();
+        toast(`${r.changed} transacties bijgewerkt`);
+      };
       sheet.querySelector('#ruleAdd').onclick = () => {
         const pattern = sheet.querySelector('#ruleText').value.trim();
         const field = sheet.querySelector('#ruleField').value;
@@ -1632,6 +1644,12 @@ document.addEventListener('click', (e) => {
     case 'tx': openTx(v); break;
     case 'pick-cat': openCategoryPicker([v]); break;
     case 'quick': openQuickSort(); break;
+    case 'guesses': S.view = 'transacties'; S.tx = { ...S.tx, kind: 'guess', scope: 'period', cat: '', q: '', sort: 'high', limit: 150 }; render(); window.scrollTo(0, 0); break;
+    case 'confirm-guess': {
+      const t = S.txs.find((x) => x.id === v);
+      if (t) { assignCategory([t], t.category, L.merchantKey(t) || null); closeSheet(); render(); }
+      break;
+    }
     case 'unmatched': S.view = 'transacties'; S.tx = { ...S.tx, kind: 'advance', scope: 'all', cat: '', q: '' }; render(); break;
     case 'group': openGroup(v); break;
     case 'group-tx': closeSheet(); S.view = 'transacties'; S.tx = { ...S.tx, cat: 'g:' + v, kind: 'all', q: '', scope: 'period', limit: 150 }; render(); window.scrollTo(0, 0); break;
@@ -1795,6 +1813,7 @@ async function loadData() {
     $('#app').innerHTML = `<div class="empty" style="padding-top:80px"><h3>Gegevens konden niet worden geladen</h3><p>${esc(e.message)}</p><button class="btn" onclick="location.reload()">Opnieuw proberen</button></div>`;
     return;
   }
+  if (S.txs.length) recompute();
   S.period = { mode: 'month', anchor: defaultAnchor() };
   render();
 }
