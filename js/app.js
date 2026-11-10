@@ -4,13 +4,15 @@ import { parseText, parseAbnXlsRows, decodeBytes, parseAmount } from './parser.j
 import { GROUPS, CATEGORIES, GROUP_BY_ID, catInfo, groupOf, UNCATEGORIZED, UNCATEGORIZED_IN } from './categories.js';
 import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
+import * as I from './invest.js';
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
 const sgn = (n, whole) => `<span style="white-space:nowrap">${n >= 0 ? '+' : '−'}${eur(Math.abs(n), whole)}</span>`;
 const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const nowIso = () => { const d = new Date(); return `${todayIso()}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`; };
 const MONTHS_SHORT = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
 const MONTHS_LONG = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const WEEKDAYS = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'];
@@ -28,6 +30,8 @@ const S = {
   period: { mode: 'month', anchor: null, from: null, to: null },
   tx: { q: '', kind: 'all', cat: '', sort: 'new', scope: 'period', limit: 150 },
   analyse: 'categorie',
+  nwTab: 'totaal',
+  inv: { kind: 'all', limit: 60 },
   trendGroups: null,
   charts: {},
   dirtyIds: new Set(),
@@ -346,7 +350,7 @@ function afterRender() {
   if (!S.txs.length) return;
   if (S.view === 'overzicht') drawOverviewCharts();
   if (S.view === 'analyse') drawAnalyseCharts();
-  if (S.view === 'vermogen') drawNetWorthChart();
+  if (S.view === 'vermogen') { if (S.nwTab === 'beleggen' && hasBux()) drawInvestChart(); else drawNetWorthChart(); }
   if (S.view === 'transacties') {
     const inp = $('#txSearch');
     if (inp && S.tx.focus) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); S.tx.focus = false; }
@@ -1025,7 +1029,18 @@ function nwMonths() {
   return all.slice(-24);
 }
 
+function hasBux() { return !!(S.settings.invest && S.settings.invest.events && S.settings.invest.events.length); }
+
+function nwSeg() {
+  return `<div class="seg" role="tablist" style="margin-top:4px">${[['totaal', 'Totaal'], ['beleggen', 'Beleggingen']].map(([k, l]) => `<button class="${S.nwTab === k ? 'on' : ''}" data-act="nw-tab" data-v="${k}">${l}</button>`).join('')}</div>`;
+}
+
 function renderNetWorth() {
+  if (S.nwTab === 'beleggen') return nwSeg() + renderInvest();
+  return nwSeg() + renderNetWorthTotal();
+}
+
+function renderNetWorthTotal() {
   const vt = visibleTxs();
   const months = nwMonths();
   const series = L.netWorthSeries(vt, S.settings, months);
@@ -1036,7 +1051,7 @@ function renderNetWorth() {
   const snaps = S.settings.investSnapshots || [];
   const pf = latestPortfolio();
   const pfGain = pf ? (pf.gain != null ? pf.gain : portfolioGain(pf.positions)) : null;
-  const gain = pfGain != null ? pfGain : snaps.length ? cur.invest - cur.inleg : null;
+  const gain = hasBux() ? cur.invest - I.netDepositsUpTo(S.settings.invest.events, nowIso()) : pfGain != null ? pfGain : snaps.length ? cur.invest - cur.inleg : null;
   const transfers = vt.filter((t) => t.account === mainAcc() && L.kindOf(t) === 'transfer' && !t.excluded).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
   const rmap = L.reimbursementMap(vt);
   return `
@@ -1050,7 +1065,7 @@ function renderNetWorth() {
         <div class="nw-part"><div class="lab"><i style="background:var(--s-invest)"></i>Beleggen</div><div class="val num">${eur(cur.invest, true)}</div><div class="sub">${gain != null ? `${sgn(gain, true)} rendement` : 'alleen inleg'}</div></div>
       </div>
     </section>
-    ${pf ? renderPortfolio(pf) : ''}
+    ${hasBux() ? `<button class="banner" data-act="nw-tab" data-v="beleggen"><div><b>${I.buildPortfolio(S.settings.invest.events).open.length} posities bij BUX</b><span>Inleg, dividend, kosten en alle transacties.</span></div><span class="go">Bekijken</span></button>` : pf ? renderPortfolio(pf) : ''}
     <section>
       <div class="panel">
         <div class="legend"><span><i style="background:var(--s-betaal)"></i>Betaalrekening</span><span><i style="background:var(--s-spaar)"></i>Sparen</span><span><i style="background:var(--s-invest)"></i>Beleggen</span></div>
@@ -1071,6 +1086,266 @@ function renderNetWorth() {
     </section>
     ${transfers.length ? `<section><h2>Laatste overboekingen</h2><div class="tx-list">${transfers.map((t) => txRow(t, rmap)).join('')}</div></section>` : ''}
   `;
+}
+
+/* ---------- Beleggingen (BUX) ---------- */
+
+const INV_KINDS = [['all', 'Alles'], ['buy', 'Aankopen'], ['sell', 'Verkopen'], ['dividend', 'Dividend'], ['fee', 'Kosten'], ['deposit', 'Stortingen'], ['other', 'Overig']];
+const fmtQty = (n) => Number(n).toLocaleString('nl-NL', { maximumFractionDigits: 6 });
+const stuks = (n) => `${fmtQty(n)} ${Math.abs(Number(n) - 1) < 1e-9 ? 'stuk' : 'stuks'}`;
+const fmtPrice = (n, cur) => (cur && cur !== 'EUR' ? `${Number(n).toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}` : eur(n));
+
+function invTitle(e) {
+  if (e.kind === 'buy') return `Gekocht: ${e.name}`;
+  if (e.kind === 'sell') return `Verkocht: ${e.name}`;
+  if (e.kind === 'deposit') return 'Storting';
+  if (e.kind === 'withdrawal') return 'Opname';
+  if (e.kind === 'dividend') return `Dividend: ${e.name || ''}`;
+  if (e.kind === 'interest') return 'Rente';
+  if (e.kind === 'fee') {
+    if (/subscription/i.test(e.sub)) return 'Abonnement BUX';
+    if (/portfolio/i.test(e.sub)) return 'Portefeuillekosten';
+    if (/trading/i.test(e.sub)) return `Transactiekosten${e.name ? ': ' + e.name : ''}`;
+    return e.sub || 'Kosten';
+  }
+  if (/security lending/i.test(e.sub)) return 'Opbrengst uitlenen';
+  if (/promo/i.test(e.sub)) return 'Promotie';
+  if (/correction/i.test(e.desc || '')) return 'Correctie kosten';
+  return e.sub || 'Overig';
+}
+
+function invIcon(e) {
+  return { buy: '🟢', sell: '🔴', deposit: '⬇️', withdrawal: '⬆️', dividend: '💰', interest: '📈', fee: '🧾' }[e.kind] || '✳️';
+}
+
+function invSub(e) {
+  if (e.kind === 'buy' || e.kind === 'sell') return `${stuks(e.qty)} à ${fmtPrice(e.price, e.acur)}${e.fee ? `, kosten ${eur(-e.fee)}` : ''}${e.kind === 'sell' && e.pnl ? `, resultaat ${eur(e.pnl)}` : ''}`;
+  if (e.kind === 'dividend') return `${e.sub === 'Manufactured Cash Dividend' ? 'Vervangend dividend' : 'Dividend'}${e.tax ? `, belasting ${e.tax.toLocaleString('nl-NL')} ${e.dcur}` : ''}`;
+  if (e.kind === 'fee' && /Period:/i.test(e.desc || '')) return `Periode ${e.desc.replace(/Period:\s*/i, '')}`;
+  if (e.kind === 'interest' && e.desc) return e.desc.replace(/Period:\s*/i, 'Periode ');
+  return e.sub || '';
+}
+
+function invRow(e) {
+  const pos = e.eur > 0;
+  return `<div class="tx pos-row">
+    <span class="tx-ico">${invIcon(e)}</span>
+    <span class="tx-main"><div class="tx-name">${esc(invTitle(e))}</div><div class="tx-sub">${esc(invSub(e))}</div></span>
+    <span class="tx-amt num ${pos ? 'in' : ''}"><span class="amt">${pos ? '+' : '−'}${eur(Math.abs(e.eur))}</span><small>${e.t.slice(11, 16)}</small></span>
+  </div>`;
+}
+
+function invState() {
+  const events = S.settings.invest.events;
+  const now = nowIso();
+  const pf = I.buildPortfolio(events);
+  const snaps = S.settings.investSnapshots || [];
+  const val = I.investValueAt(events, snaps, now);
+  const rows = pf.open.map((p) => {
+    const m = I.snapValueFor(val.snap, p, events);
+    return { ...p, value: m ? Number(m.value) : null, pct: m && m.pct != null ? Number(m.pct) : null };
+  });
+  const tradedAfter = val.snap ? events.filter((e) => (e.kind === 'buy' || e.kind === 'sell') && e.t > I.snapMoment(val.snap)) : [];
+  return { events, pf, val, rows, tradedAfter, now };
+}
+
+function renderInvest() {
+  if (!hasBux()) {
+    return `<div class="empty" style="padding-top:30px">
+      <h3>Nog geen BUX-gegevens</h3>
+      <p>Importeer de transactie-export van BUX. Dan zie je hier al je posities, inleg, dividend en kosten.</p>
+      <div class="btn-row" style="justify-content:center"><button class="btn" data-act="import">BUX-export importeren</button><button class="btn ghost" data-act="bux-howto">Zo exporteer je</button></div>
+    </div>`;
+  }
+  const { events, pf, val, rows, tradedAfter } = invState();
+  const { tot } = pf;
+  const value = val.value;
+  const gain = value - tot.netDeposits;
+  const big = splitEur(value);
+  const known = rows.filter((r) => r.value != null);
+  const byType = { etf: 0, aandeel: 0 };
+  for (const r of rows) byType[r.type] = (byType[r.type] || 0) + (r.value != null ? r.value : r.cost);
+  byType.cash = tot.cash;
+  const typeTotal = Object.values(byType).reduce((a, b) => a + b, 0) || 1;
+  const TYPE_LABEL = { etf: 'ETF', aandeel: 'Aandelen', cash: 'Cash' };
+  const TYPE_COLOR = { etf: 'var(--s-income)', aandeel: 'var(--s-expense)', cash: 'var(--s-invest)' };
+  const types = Object.entries(byType).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const divByYear = {};
+  for (const e of events) if (e.kind === 'dividend') { const y = e.t.slice(0, 4); (divByYear[y] ||= { net: 0, n: 0 }); divByYear[y].net += e.eur; divByYear[y].n++; }
+  const f = S.inv;
+  const hist = events.filter((e) => f.kind === 'all' || e.kind === f.kind || (f.kind === 'other' && ['interest', 'other', 'withdrawal'].includes(e.kind)) || (f.kind === 'deposit' && e.kind === 'withdrawal')).slice().reverse();
+  const shown = hist.slice(0, f.limit);
+  let histHtml = '';
+  const byDay = new Map();
+  for (const e of shown) { const d = e.t.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(e); }
+  for (const [d, items] of byDay) histHtml += `<div class="day-head"><span>${fmtDate(d)}</span></div><div class="tx-list">${items.map(invRow).join('')}</div>`;
+  const snapDate = val.snap ? fmtDate(val.snap.date, false) : null;
+  return `
+    <section class="hero">
+      <p class="hero-label">Waarde beleggingen${val.book ? ' (aankoopwaarde)' : ''}</p>
+      <div class="nw-total num">${big.main}<span class="cents" style="font-size:.42em;color:var(--muted)">${big.cents}</span></div>
+      <p class="hero-sub">${sgn(gain)} rendement op ${eur(tot.netDeposits)} ingelegd${tot.netDeposits ? ` (${(gain / tot.netDeposits * 100).toLocaleString('nl-NL', { maximumFractionDigits: 1 })}%)` : ''}</p>
+      <p class="help" style="margin-top:-8px">${val.book ? 'Nog geen actuele waardes ingevuld: dit is wat je ervoor betaald hebt plus je cash.' : val.estimated ? `Op basis van je waardes van ${snapDate}, plus wat je daarna hebt gestort.` : `Volgens je waardes van ${snapDate}.`}</p>
+    </section>
+    ${tradedAfter.length || val.book ? `<button class="banner" data-act="nw-update"><div><b>${val.book ? 'Vul de actuele waardes in' : `${tradedAfter.length} ${tradedAfter.length === 1 ? 'transactie' : 'transacties'} na ${snapDate}`}</b><span>Neem de waarde per positie over uit de BUX-app, dan klopt je rendement per positie. Je posities staan al klaar.</span></div><span class="go">Bijwerken</span></button>` : ''}
+    <section>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Ingelegd</div><div class="stat-value num">${eur(tot.netDeposits, true)}</div><div class="stat-delta">${events.filter((e) => e.kind === 'deposit').length} stortingen</div></div>
+        <div class="stat"><div class="stat-label">Dividend</div><div class="stat-value num">${eur(tot.dividends)}</div><div class="stat-delta">netto ontvangen</div></div>
+        <div class="stat"><div class="stat-label">Kosten</div><div class="stat-value num">${eur(tot.fees)}</div><div class="stat-delta">abonnement en transacties</div></div>
+      </div>
+      <div class="stats" style="margin-top:8px">
+        <div class="stat"><div class="stat-label">Cash bij BUX</div><div class="stat-value num">${eur(tot.cash)}</div></div>
+        <div class="stat"><div class="stat-label">Rente en overig</div><div class="stat-value num">${eur(tot.interest + tot.other)}</div><div class="stat-delta">rente, uitlenen, acties</div></div>
+        <div class="stat"><div class="stat-label">Verkoopresultaat</div><div class="stat-value num">${eur(tot.realized)}</div><div class="stat-delta">${pf.closed.length} verkocht</div></div>
+      </div>
+    </section>
+    <section>
+      <h2>Verdeling</h2>
+      <div class="ribbon" role="img" aria-label="Verdeling over ETF's, aandelen en cash">${types.map(([t, v]) => `<span style="flex-grow:${v};background:${TYPE_COLOR[t]}" title="${TYPE_LABEL[t]}: ${eur(v)}"></span>`).join('')}</div>
+      <div class="ribbon-legend">${types.map(([t, v]) => `<span><i style="background:${TYPE_COLOR[t]}"></i>${TYPE_LABEL[t]} ${Math.round((v / typeTotal) * 100)}%</span>`).join('')}</div>
+    </section>
+    <section>
+      <h2>Posities <span class="aside">${rows.length}${known.length && known.length < rows.length ? `, ${known.length} met actuele waarde` : ''}</span></h2>
+      <div class="tx-list">
+        ${rows.sort((a, b) => (b.value ?? b.cost) - (a.value ?? a.cost)).map((r) => {
+          const res = r.value != null ? r.value - r.cost : null;
+          return `<button class="tx" data-act="inv-pos" data-v="${esc(r.isin)}">
+            <span class="tx-ico" style="background:color-mix(in srgb, ${TYPE_COLOR[r.type]} 18%, transparent)">${r.type === 'etf' ? '🌍' : '📈'}</span>
+            <span class="tx-main"><div class="tx-name">${esc(r.name)}</div><div class="tx-sub">${stuks(r.qty)}, gem. ${eur(r.avg)}</div></span>
+            <span class="tx-amt num"><span class="amt">${eur(r.value != null ? r.value : r.cost)}</span><small class="${res != null && res >= 0 ? 'pos' : ''}">${res != null ? `${res >= 0 ? '+' : '−'}${eur(Math.abs(res))}` : 'aankoopwaarde'}</small></span>
+          </button>`;
+        }).join('')}
+        <div class="tx pos-row"><span class="tx-ico">💶</span><span class="tx-main"><div class="tx-name">Cash</div><div class="tx-sub">Nog niet belegd</div></span><span class="tx-amt num"><span class="amt">${eur(tot.cash)}</span></span></div>
+      </div>
+      <p class="help">Resultaat per positie = actuele waarde min wat je ervoor betaalde (zonder transactiekosten). Posities waarin je na je laatste waardes nog hebt gehandeld, tonen de aankoopwaarde.</p>
+    </section>
+    <section>
+      <h2>Ingelegd door de tijd</h2>
+      <div class="panel"><div class="chart-box"><canvas id="invChart" aria-label="Totaal ingelegd per maand"></canvas></div></div>
+    </section>
+    <section>
+      <h2>Kosten <span class="aside">${eur(tot.fees)}</span></h2>
+      <table class="tbl"><tbody>
+        <tr><td>Abonnement BUX</td><td class="r num">${eur(tot.feesSub)}</td></tr>
+        <tr><td>Portefeuillekosten</td><td class="r num">${eur(tot.feesPortfolio)}</td></tr>
+        <tr><td>Transactiekosten</td><td class="r num">${eur(tot.feesTrading)}</td></tr>
+        ${tot.feesOther ? `<tr><td>Overige kosten</td><td class="r num">${eur(tot.feesOther)}</td></tr>` : ''}
+        ${tot.divTax ? `<tr><td>Ingehouden dividendbelasting</td><td class="r num">≈ ${eur(tot.divTax)}</td></tr>` : ''}
+      </tbody></table>
+    </section>
+    <section>
+      <h2>Dividend per jaar</h2>
+      <table class="tbl"><thead><tr><th>Jaar</th><th class="r">Uitkeringen</th><th class="r">Netto</th></tr></thead><tbody>
+        ${Object.entries(divByYear).sort((a, b) => b[0].localeCompare(a[0])).map(([y, d]) => `<tr><td>${y}</td><td class="r num">${d.n}</td><td class="r num">${eur(d.net)}</td></tr>`).join('')}
+      </tbody></table>
+    </section>
+    ${pf.closed.length ? `<section><h2>Verkocht</h2><table class="tbl"><thead><tr><th>Positie</th><th class="r">Resultaat</th></tr></thead><tbody>${pf.closed.map((p) => `<tr><td>${esc(p.name)}</td><td class="r num">${sgn(p.realized)}</td></tr>`).join('')}</tbody></table></section>` : ''}
+    <section>
+      <h2>Alle transacties <span class="aside">${hist.length}</span></h2>
+      <div class="chips" style="padding:0 0 4px">${INV_KINDS.map(([k, l]) => `<button class="chip ${f.kind === k ? 'on' : ''}" data-act="inv-kind" data-v="${k}">${l}</button>`).join('')}</div>
+      ${histHtml || '<p class="muted">Geen transacties van dit soort.</p>'}
+      ${hist.length > f.limit ? `<button class="btn ghost more-btn" data-act="inv-more">Meer laden (${hist.length - f.limit})</button>` : ''}
+    </section>
+    <section>
+      <div class="btn-row"><button class="btn quiet small" data-act="import">BUX-export bijwerken</button><button class="btn quiet small" data-act="bux-howto">Zo exporteer je</button></div>
+      <p class="help">Laatst ingelezen: ${S.settings.invest.importedAt ? fmtDate(S.settings.invest.importedAt.slice(0, 10)) : 'onbekend'}. Een nieuwe export wordt samengevoegd, dubbele regels worden overgeslagen.</p>
+    </section>`;
+}
+
+function drawInvestChart() {
+  const events = S.settings.invest.events;
+  const startM = events[0].t.slice(0, 7);
+  const months = L.monthsBetween(startM, currentMonth());
+  const data = months.map((m) => I.netDepositsUpTo(events, `${L.lastDayOfMonth(m)}T23:59:59`));
+  const color = cssVar('--s-income');
+  makeChart('invChart', {
+    type: 'line',
+    data: { labels: months.map((m) => `${monthLabel(m, false)} ${m.slice(2, 4)}`), datasets: [{ label: 'Ingelegd', data, borderColor: color, backgroundColor: color + '33', fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, stepped: true }] },
+    options: {
+      interaction: { mode: 'index', intersect: false },
+      scales: { x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 6 } }, y: { ...euroAxis, beginAtZero: true } },
+      plugins: { tooltip: { callbacks: { title: (c) => monthLabel(months[c[0].dataIndex]), label: (c) => ` Ingelegd: ${eur(c.raw)}` } } },
+    },
+  });
+}
+
+function openInvestPosition(isin) {
+  const { events, rows, pf } = invState();
+  const p = rows.find((r) => r.isin === isin) || pf.closed.find((r) => r.isin === isin);
+  if (!p) return;
+  const list = events.filter((e) => e.isin === isin).slice().reverse();
+  const res = p.value != null ? p.value - p.cost : null;
+  openSheet({
+    title: p.name,
+    body: `
+      <div class="detail-amt num">${eur(p.value != null ? p.value : p.cost)}</div>
+      <div class="muted">${p.value != null ? 'actuele waarde volgens je laatste invoer' : 'aankoopwaarde, nog geen actuele waarde'}</div>
+      <dl class="kv">
+        <dt>Aantal</dt><dd class="num">${fmtQty(p.qty)}</dd>
+        <dt>Gem. aankoopprijs</dt><dd class="num">${p.avg != null ? eur(p.avg) : '-'}</dd>
+        <dt>Aankoopwaarde</dt><dd class="num">${eur(p.cost)}</dd>
+        ${res != null ? `<dt>Resultaat</dt><dd class="num">${sgn(res)}${p.pct != null ? ` (${p.pct.toLocaleString('nl-NL')}% volgens BUX)` : ''}</dd>` : ''}
+        <dt>Dividend</dt><dd class="num">${eur(p.dividends)}</dd>
+        <dt>Transactiekosten</dt><dd class="num">${eur(p.fees)}</dd>
+        ${p.realized ? `<dt>Verkoopresultaat</dt><dd class="num">${sgn(p.realized)}</dd>` : ''}
+        <dt>Eerste aankoop</dt><dd>${fmtDate(p.first.slice(0, 10))}</dd>
+        <dt>ISIN</dt><dd>${esc(p.isin)}</dd>
+        <dt>Soort</dt><dd>${p.type === 'etf' ? 'ETF' : 'Aandeel'}</dd>
+      </dl>
+      <h2 style="font-size:15px">Transacties</h2>
+      <div class="tx-list">${list.map((e) => invRow(e).replace('</small>', ` ${fmtDate(e.t.slice(0, 10), false)}</small>`)).join('')}</div>`,
+  });
+}
+
+function openBuxHowTo() {
+  openSheet({
+    title: 'BUX-export maken',
+    body: `
+      <ol style="padding-left:20px;line-height:1.6">
+        <li>Open de BUX-app en ga naar je account (het poppetje rechtsboven).</li>
+        <li>Zoek naar transactiegeschiedenis of export. Kies alle soorten transacties en een startdatum vóór je eerste storting.</li>
+        <li>BUX mailt je een CSV-bestand. Sla dat op.</li>
+        <li>Kies in Geldzicht Importeren (pijltje rechtsboven) en selecteer het bestand. De app herkent zelf dat het een BUX-export is.</li>
+      </ol>
+      <p class="help">Waar de knop precies zit in de BUX-app kan verschillen per versie.</p>`,
+  });
+}
+
+async function handleBux(text, file) {
+  const { events, skipped } = I.parseBux(text);
+  if (!events.length) { toast('Geen transacties gevonden in de BUX-export'); return; }
+  const old = S.settings.invest?.events || [];
+  const { events: merged, added } = I.mergeEvents(old, events);
+  const pf = I.buildPortfolio(merged);
+  openSheet({
+    title: 'BUX-export importeren',
+    body: `
+      <dl class="kv">
+        <dt>Bestand</dt><dd>${esc(file.name)}</dd>
+        <dt>Periode</dt><dd>${fmtDate(events[0].t.slice(0, 10))} tot ${fmtDate(events[events.length - 1].t.slice(0, 10))}</dd>
+        <dt>Gevonden</dt><dd>${events.length} transacties</dd>
+        <dt>Nieuw</dt><dd><b>${added}</b></dd>
+        <dt>Posities</dt><dd>${pf.open.length} open, ${pf.closed.length} verkocht</dd>
+        <dt>Ingelegd</dt><dd>${eur(pf.tot.netDeposits)}</dd>
+        <dt>Cash</dt><dd>${eur(pf.tot.cash)}</dd>
+        ${skipped ? `<dt>Overgeslagen</dt><dd>${skipped} regels</dd>` : ''}
+      </dl>`,
+    foot: added ? `<button class="btn block" id="doBux">Importeren</button>` : '<button class="btn ghost block" data-act="sheet-close">Niets nieuws, sluiten</button>',
+    onMount: (sheet) => {
+      const b = sheet.querySelector('#doBux');
+      if (b) b.onclick = () => {
+        S.settings.invest = { events: merged, importedAt: nowIso(), file: file.name };
+        markSettings();
+        closeSheet();
+        S.view = 'vermogen';
+        S.nwTab = 'beleggen';
+        render();
+        window.scrollTo(0, 0);
+        toast(`${added} BUX-transacties geïmporteerd`);
+      };
+    },
+  });
 }
 
 function drawNetWorthChart() {
@@ -1162,7 +1437,12 @@ function openNwUpdate() {
   const vt = visibleTxs();
   const series = L.netWorthSeries(vt, S.settings, [currentMonth()]);
   const pf = latestPortfolio();
-  const start = pf ? pf.positions : [{ type: 'etf' }, { name: 'Cash', type: 'cash' }];
+  let start = pf ? pf.positions : [{ type: 'etf' }, { name: 'Cash', type: 'cash' }];
+  if (hasBux()) {
+    const st = invState();
+    start = st.rows.map((r) => ({ name: r.name, type: r.type, shares: Math.round(r.qty * 1e6) / 1e6, value: r.value != null ? r.value : '', pct: r.pct != null ? r.pct : '' }));
+    start.push({ name: 'Cash', type: 'cash', value: st.pf.tot.cash });
+  }
   openSheet({
     title: 'Portefeuille bijwerken',
     body: `
@@ -1200,7 +1480,7 @@ function openNwUpdate() {
         let value = positions.reduce((a, p) => a + p.value, 0);
         if (!positions.length) value = parseAmount(sheet.querySelector('#snapVal').value);
         if (!d || isNaN(value) || (!positions.length && !value)) { toast('Vul posities of een totaal in'); return; }
-        const snap = { date: d, value: Math.round(value * 100) / 100 };
+        const snap = { date: d, value: Math.round(value * 100) / 100, at: d === todayIso() ? nowIso() : `${d}T23:59:59` };
         const g = parseAmount(String(sheet.querySelector('#snapGain').value || '').replace('+', ''));
         if (!isNaN(g)) snap.gain = g;
         if (positions.length) snap.positions = positions;
@@ -1226,7 +1506,7 @@ function renderSettings() {
     <section style="margin-top:6px">
       <h2>Gegevens</h2>
       <div class="set-group">
-        <button class="set-row" data-act="import"><span class="ico">⤓</span><span class="txt">Bankbestand importeren<small>${lastImport ? `Laatst: ${fmtDate(lastImport.date)}, ${lastImport.added} nieuw` : 'ABN AMRO TXT of XLS, of een CSV met kopregel'}</small></span><span class="chev">›</span></button>
+        <button class="set-row" data-act="import"><span class="ico">⤓</span><span class="txt">Bestand importeren<small>${lastImport ? `Laatst: ${fmtDate(lastImport.date)}, ${lastImport.added} nieuw. ` : ''}ABN AMRO TXT of XLS, of de BUX-export (CSV)</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="quick"><span class="ico">🗂️</span><span class="txt">Snel indelen<small>Transacties zonder categorie één voor één indelen</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="howto"><span class="ico">❓</span><span class="txt">Zo download je je transacties<small>Stappen voor ABN AMRO</small></span><span class="chev">›</span></button>
       </div>
@@ -1399,6 +1679,7 @@ function openInvestSettings() {
   openSheet({
     title: 'Sparen en beleggen',
     body: `
+      ${hasBux() ? `<div class="callout">Je BUX-export is ingelezen (${S.settings.invest.events.length} transacties). De inleg komt daaruit, dus het veld hieronder wordt niet gebruikt.<div class="btn-row" style="margin-top:10px"><button class="btn danger small" data-act="bux-remove" type="button">BUX-gegevens verwijderen</button></div></div>` : ''}
       <div class="field"><label for="invStart">Al belegd vóór je eerste import (inleg in euro)</label><input id="invStart" class="input" inputmode="decimal" value="${S.settings.investStart || ''}" placeholder="0"></div>
       <div class="field"><label for="savStart">Spaarsaldo vóór je eerste import</label><input id="savStart" class="input" inputmode="decimal" value="${S.settings.savingsStart || ''}" placeholder="0">
       <p class="help">Alleen nodig als je je spaarrekening niet mee downloadt. Anders gebruikt de app het echte saldo.</p></div>
@@ -1492,6 +1773,12 @@ async function readFile(file) {
 
 async function handleFile(file) {
   if (!file) return;
+  if (/\.csv$/i.test(file.name) || file.size < 5e6) {
+    try {
+      const head = await file.slice(0, 2000).text();
+      if (I.isBuxCsv(head)) { await handleBux(await file.text(), file); return; }
+    } catch (e) { /* geen tekstbestand */ }
+  }
   let res;
   try {
     res = await readFile(file);
@@ -1677,6 +1964,17 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'nw-update': openNwUpdate(); break;
+    case 'nw-tab': S.nwTab = v; S.view = 'vermogen'; render(); window.scrollTo(0, 0); break;
+    case 'inv-kind': S.inv.kind = v; S.inv.limit = 60; render(); break;
+    case 'inv-more': S.inv.limit += 120; render(); break;
+    case 'inv-pos': openInvestPosition(v); break;
+    case 'bux-howto': openBuxHowTo(); break;
+    case 'bux-remove': {
+      const btn = el;
+      if (btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.textContent = 'Zeker weten? Tik nog eens'; break; }
+      delete S.settings.invest; markSettings(); closeSheet(); render(); toast('BUX-gegevens verwijderd');
+      break;
+    }
     case 'set': openSettingsSheet(v); break;
     case 'export-csv': exportCsv(); break;
     case 'export-json': exportJson(); break;

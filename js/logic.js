@@ -1,5 +1,6 @@
 // Indelen, voorschieten koppelen en berekeningen.
 import { CATEGORIES, CAT_BY_ID, GROUP_BY_ID, HINTS, UNCATEGORIZED, UNCATEGORIZED_IN, catInfo } from './categories.js';
+import { investValueAt, netDepositsUpTo } from './invest.js';
 
 export function normalize(s) {
   return ' ' + String(s || '')
@@ -507,6 +508,7 @@ export function netWorthSeries(txs, settings, months) {
   const investStart = Number(settings.investStart || 0);
   const snaps = [...(settings.investSnapshots || [])].sort((a, b) => a.date.localeCompare(b.date));
   const transfers = txs.filter((t) => t.account === main && !t.excluded && kindOf(t) === 'transfer');
+  const bux = settings.invest && settings.invest.events && settings.invest.events.length ? settings.invest.events : null;
   return months.map((mk) => {
     const end = lastDayOfMonth(mk);
     const betaal = balanceAt(closing[main], end);
@@ -520,6 +522,13 @@ export function netWorthSeries(txs, settings, months) {
     const spaarVals = spaarAccounts.map((a) => balanceAt(closing[a], end)).filter((v) => v != null);
     if (spaarVals.length) spaar = spaarVals.reduce((a, b) => a + b, 0);
     else spaar = savingsStart + toSavings;
+    if (bux) {
+      // Met de BUX-export: exacte inleg, en waarde = laatste opgegeven waarde plus stortingen daarna
+      const upTo = `${end}T23:59:59`;
+      const v = upTo < bux[0].t ? { value: 0 } : investValueAt(bux, snaps, upTo);
+      const inl = netDepositsUpTo(bux, upTo);
+      return { month: mk, betaal, spaar, invest: v.value, inleg: inl, total: (betaal || 0) + spaar + v.value };
+    }
     const inleg = investStart + toInvest;
     let invest = inleg;
     const snap = [...snaps].reverse().find((s) => s.date <= end);
