@@ -7,7 +7,7 @@ import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
 import * as N from './insights.js';
 
-const VERSION = '1.7.2';
+const VERSION = '1.7.3';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -103,7 +103,8 @@ function currentMonth() { return todayIso().slice(0, 7); }
 
 // Periodes: kalenderperiodes (maand, kwartaal, jaar) zijn te verschuiven met de pijltjes,
 // lopende periodes (31 dagen, 3 maanden, 365 dagen) eindigen altijd vandaag.
-const PERIOD_CHIPS = [['month', 'Deze maand'], ['days31', 'Afgelopen 31 dagen'], ['quarter', 'Dit kwartaal'], ['months3', 'Afgelopen 3 maanden'], ['year', 'Dit jaar'], ['days365', 'Afgelopen 365 dagen'], ['all', 'Alles'], ['custom', 'Kies datums']];
+// Twee rijen van vier: boven de kalenderperiodes, onder de lopende periodes
+const PERIOD_CHIPS = [['month', 'Deze', 'maand'], ['days31', 'Afgelopen', '31 dagen'], ['quarter', 'Dit', 'kwartaal'], ['months3', 'Afgelopen', '3 maanden'], ['year', 'Dit', 'jaar'], ['days365', 'Afgelopen', '365 dagen'], ['all', '', 'Alles'], ['custom', 'Kies', 'datums']];
 const ROLLING = { days31: 31, days365: 365 };
 
 function addDays(d, n) {
@@ -378,8 +379,8 @@ function render() {
         <button class="icon-btn" data-act="import" aria-label="Bankbestand importeren" title="Importeren">⤓</button>
       </header>
       ${showPeriod ? `
-      <div class="chips" role="tablist" aria-label="Periode">
-        ${PERIOD_CHIPS.map(([m, l]) => `<button class="chip ${p.mode === m ? 'on' : ''}" data-act="period-mode" data-v="${m}">${l}</button>`).join('')}
+      <div class="periods" role="tablist" aria-label="Periode">
+        ${PERIOD_CHIPS.map(([m, a, b]) => `<button class="pchip ${p.mode === m ? 'on' : ''}" data-act="period-mode" data-v="${m}" aria-label="${esc(`${a} ${b}`.trim())}">${a ? `<small>${a}</small>` : ''}<span>${b}</span></button>`).join('')}
       </div>
       <div class="period">
         <button class="period-btn" data-act="period-prev" aria-label="Vorige periode" ${canPrev ? '' : 'disabled'} ${navigable ? '' : 'style="visibility:hidden"'}>‹</button>
