@@ -436,7 +436,11 @@ export function monthReport(txs, settings, mk, extra = {}) {
   const movers = groupRows.filter((r) => r.group !== 'reizen' && r.diffAvg != null && Math.abs(r.diffAvg) >= 20).sort((a, b) => Math.abs(b.diffAvg) - Math.abs(a.diffAvg)).slice(0, 3);
   for (const r of movers) {
     const gname = GROUP_BY_ID[r.group]?.name || r.group;
-    highlights.push({ tone: r.diffAvg > 0 ? 'up' : 'down', text: Math.abs(r.cur) < 0.5 ? `${gname}: niets uitgegeven, normaal ${fmt(r.avg)} per maand.` : `${gname}: ${fmt(r.cur)}, dat is ${fmt(Math.abs(r.diffAvg))} ${r.diffAvg > 0 ? 'meer' : 'minder'} dan gemiddeld.` });
+    let text;
+    if (Math.abs(r.cur) < 0.5) text = `${gname}: niets uitgegeven, normaal ${fmt(r.avg)} per maand.`;
+    else if (r.cur < 0) text = `${gname}: per saldo ${fmt(-r.cur)} terugontvangen, normaal ${fmt(Math.abs(r.avg))} ${r.avg >= 0 ? 'uitgaven' : 'terug'} per maand.`;
+    else text = `${gname}: ${fmt(r.cur)}, dat is ${fmt(Math.abs(r.diffAvg))} ${r.diffAvg > 0 ? 'meer' : 'minder'} dan gemiddeld.`;
+    highlights.push({ tone: r.diffAvg > 0 ? 'up' : 'down', text });
   }
   if (biggest[0]) highlights.push({ tone: 'info', text: `Grootste uitgave: ${L.displayName(biggest[0])}, ${fmt(-L.effectiveAmount(biggest[0], rmap))}.` });
   if (newMerchants.size) highlights.push({ tone: 'info', text: `${newMerchants.size} ${newMerchants.size === 1 ? 'nieuwe plek' : 'nieuwe plekken'} waar je voor het eerst geld uitgaf.` });
