@@ -7,7 +7,7 @@ import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
 import * as N from './insights.js';
 
-const VERSION = '1.7.1';
+const VERSION = '1.7.2';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -33,7 +33,6 @@ const S = {
   analyse: 'rapport',
   reportMonth: null,
   nwTab: 'totaal',
-  totScope: 'all',
   inv: { kind: 'all', limit: 60 },
   trendGroups: null,
   charts: {},
@@ -102,10 +101,37 @@ function currentMonth() { return todayIso().slice(0, 7); }
 
 /* ---------- Periode ---------- */
 
+// Periodes: kalenderperiodes (maand, kwartaal, jaar) zijn te verschuiven met de pijltjes,
+// lopende periodes (31 dagen, 3 maanden, 365 dagen) eindigen altijd vandaag.
+const PERIOD_CHIPS = [['month', 'Deze maand'], ['days31', 'Afgelopen 31 dagen'], ['quarter', 'Dit kwartaal'], ['months3', 'Afgelopen 3 maanden'], ['year', 'Dit jaar'], ['days365', 'Afgelopen 365 dagen'], ['all', 'Alles'], ['custom', 'Kies datums']];
+const ROLLING = { days31: 31, days365: 365 };
+
+function addDays(d, n) {
+  const [y, m, day] = d.split('-').map(Number);
+  const x = new Date(Date.UTC(y, m - 1, day + n));
+  return x.toISOString().slice(0, 10);
+}
+function addMonthsDate(d, n) {
+  const mk = shiftMonth(d.slice(0, 7), n);
+  const last = Number(L.lastDayOfMonth(mk).slice(8, 10));
+  return `${mk}-${String(Math.min(Number(d.slice(8, 10)), last)).padStart(2, '0')}`;
+}
+function shortDate(d) {
+  const [y, m, day] = d.split('-').map(Number);
+  return `${day} ${MONTHS_SHORT[m - 1]}${String(y) !== todayIso().slice(0, 4) ? ' ' + y : ''}`;
+}
+function currentQuarter() { const [y, m] = currentMonth().split('-').map(Number); return `${y}-Q${Math.ceil(m / 3)}`; }
+function quarterStart(q) { const [y, n] = q.split('-Q').map(Number); return `${y}-${String((n - 1) * 3 + 1).padStart(2, '0')}`; }
+function shiftQuarter(q, d) { const [y, n] = q.split('-Q').map(Number); const i = y * 4 + (n - 1) + d; return `${Math.floor(i / 4)}-Q${(i % 4) + 1}`; }
+
 function periodRange(p = S.period) {
   const ms = dataMonths();
+  const today = todayIso();
   if (p.mode === 'month') return { from: `${p.anchor}-01`, to: L.lastDayOfMonth(p.anchor) };
+  if (p.mode === 'quarter') { const st = quarterStart(p.anchor); return { from: `${st}-01`, to: L.lastDayOfMonth(shiftMonth(st, 2)) }; }
   if (p.mode === 'year') return { from: `${p.anchor}-01-01`, to: `${p.anchor}-12-31` };
+  if (ROLLING[p.mode]) return { from: addDays(today, -(ROLLING[p.mode] - 1)), to: today };
+  if (p.mode === 'months3') return { from: addDays(addMonthsDate(today, -3), 1), to: today };
   if (p.mode === 'last12') {
     const end = ms.length ? ms[ms.length - 1] : currentMonth();
     return { from: `${shiftMonth(end, -11)}-01`, to: L.lastDayOfMonth(end) };
@@ -116,22 +142,29 @@ function periodRange(p = S.period) {
 }
 
 function isPartialMonth() { return S.period.mode === 'month' && S.period.anchor === currentMonth(); }
+function isPartialPeriod() {
+  const p = S.period;
+  return isPartialMonth() || (p.mode === 'quarter' && p.anchor === currentQuarter()) || (p.mode === 'year' && p.anchor === currentMonth().slice(0, 4));
+}
 
 function prevRange() {
   const p = S.period;
-  if (p.mode === 'month') {
-    const r = periodRange({ mode: 'month', anchor: shiftMonth(p.anchor, -1) });
-    if (isPartialMonth()) {
-      const day = todayIso().slice(8, 10);
-      const to = `${shiftMonth(p.anchor, -1)}-${day}`;
-      return { from: r.from, to: to < r.to ? to : r.to };
-    }
-    return r;
-  }
-  if (p.mode === 'year') return periodRange({ mode: 'year', anchor: String(Number(p.anchor) - 1) });
+  const today = todayIso();
+  // Lopende kalenderperiode: vergelijk met hetzelfde aantal dagen van de vorige periode
+  const cut = (r, from) => {
+    if (!isPartialPeriod()) return r;
+    const days = Math.round((new Date(today) - new Date(from)) / 86400000);
+    const to = addDays(r.from, days);
+    return { from: r.from, to: to < r.to ? to : r.to };
+  };
+  const cur = periodRange();
+  if (p.mode === 'month') return cut(periodRange({ mode: 'month', anchor: shiftMonth(p.anchor, -1) }), cur.from);
+  if (p.mode === 'quarter') return cut(periodRange({ mode: 'quarter', anchor: shiftQuarter(p.anchor, -1) }), cur.from);
+  if (p.mode === 'year') return cut(periodRange({ mode: 'year', anchor: String(Number(p.anchor) - 1) }), cur.from);
+  if (ROLLING[p.mode]) return { from: addDays(cur.from, -ROLLING[p.mode]), to: addDays(cur.from, -1) };
+  if (p.mode === 'months3') return { from: addMonthsDate(cur.from, -3), to: addDays(cur.from, -1) };
   if (p.mode === 'last12') {
-    const r = periodRange();
-    const endM = r.to.slice(0, 7);
+    const endM = cur.to.slice(0, 7);
     return { from: `${shiftMonth(endM, -23)}-01`, to: L.lastDayOfMonth(shiftMonth(endM, -12)) };
   }
   return null;
@@ -140,17 +173,34 @@ function prevRange() {
 function periodLabel() {
   const p = S.period;
   if (p.mode === 'month') return monthLabel(p.anchor);
+  if (p.mode === 'quarter') { const [y, n] = p.anchor.split('-Q'); const st = quarterStart(p.anchor); return `${n}e kwartaal ${y} (${MONTHS_SHORT[Number(st.slice(5)) - 1]} t/m ${MONTHS_SHORT[Number(st.slice(5)) + 1]})`; }
   if (p.mode === 'year') return p.anchor;
+  if (p.mode === 'days31') return 'Afgelopen 31 dagen';
+  if (p.mode === 'months3') return 'Afgelopen 3 maanden';
+  if (p.mode === 'days365') return 'Afgelopen 365 dagen';
   if (p.mode === 'last12') return 'Laatste 12 maanden';
   if (p.mode === 'custom') return `${fmtDate(p.from)} tot ${fmtDate(p.to)}`;
   return 'Alles';
 }
 
+// Datums onder het periodelabel bij lopende periodes
+function periodSub() {
+  const p = S.period;
+  if (!ROLLING[p.mode] && p.mode !== 'months3') return '';
+  const r = periodRange();
+  return `${shortDate(r.from)} tot en met ${shortDate(r.to)}`;
+}
+
 function periodNoun() {
   const p = S.period;
   if (p.mode === 'month') return MONTHS_LONG[Number(p.anchor.slice(5)) - 1];
+  if (p.mode === 'quarter') return `het ${p.anchor.split('-Q')[1]}e kwartaal`;
   if (p.mode === 'year') return p.anchor;
+  if (p.mode === 'days31') return 'de afgelopen 31 dagen';
+  if (p.mode === 'months3') return 'de afgelopen 3 maanden';
+  if (p.mode === 'days365') return 'de afgelopen 365 dagen';
   if (p.mode === 'last12') return 'de laatste 12 maanden';
+  if (p.mode === 'all') return 'totaal';
   return 'deze periode';
 }
 
@@ -160,7 +210,11 @@ function prevNoun() {
     const m = MONTHS_SHORT[Number(shiftMonth(p.anchor, -1).slice(5)) - 1];
     return isPartialMonth() ? `1 tot ${Number(todayIso().slice(8, 10))} ${m}` : m;
   }
-  if (p.mode === 'year') return String(Number(p.anchor) - 1);
+  if (p.mode === 'quarter') return isPartialPeriod() ? 'dezelfde dagen vorig kwartaal' : 'vorig kwartaal';
+  if (p.mode === 'year') return isPartialPeriod() ? `dezelfde periode in ${Number(p.anchor) - 1}` : String(Number(p.anchor) - 1);
+  if (p.mode === 'days31') return 'de 31 dagen ervoor';
+  if (p.mode === 'months3') return 'de 3 maanden ervoor';
+  if (p.mode === 'days365') return 'het jaar ervoor';
   if (p.mode === 'last12') return 'jaar ervoor';
   return '';
 }
@@ -169,7 +223,9 @@ function chartMonths() {
   const p = S.period;
   const r = periodRange();
   if (p.mode === 'month') return L.monthsBetween(shiftMonth(p.anchor, -5), p.anchor);
-  const ms = L.monthsBetween(r.from.slice(0, 7), r.to.slice(0, 7));
+  const endM = r.to.slice(0, 7) > currentMonth() ? currentMonth() : r.to.slice(0, 7);
+  let ms = L.monthsBetween(r.from.slice(0, 7), endM);
+  if (ms.length < 6) ms = L.monthsBetween(shiftMonth(endM, -5), endM);
   return ms.length > 36 ? ms.slice(-36) : ms;
 }
 
@@ -310,8 +366,10 @@ function render() {
   const showPeriod = (['overzicht', 'transacties'].includes(S.view) || (S.view === 'analyse' && !['rapport', 'vast', 'reizen'].includes(S.analyse))) && S.txs.length;
   const p = S.period;
   const ms = dataMonths();
-  const canPrev = p.mode === 'month' ? ms.length && p.anchor > ms[0] : p.mode === 'year' ? ms.length && p.anchor > ms[0].slice(0, 4) : false;
-  const canNext = p.mode === 'month' ? p.anchor < currentMonth() : p.mode === 'year' ? p.anchor < currentMonth().slice(0, 4) : false;
+  const canPrev = p.mode === 'month' ? ms.length && p.anchor > ms[0] : p.mode === 'quarter' ? ms.length && quarterStart(p.anchor) > ms[0] : p.mode === 'year' ? ms.length && p.anchor > ms[0].slice(0, 4) : false;
+  const canNext = p.mode === 'month' ? p.anchor < currentMonth() : p.mode === 'quarter' ? p.anchor < currentQuarter() : p.mode === 'year' ? p.anchor < currentMonth().slice(0, 4) : false;
+  const navigable = ['month', 'quarter', 'year'].includes(p.mode);
+  const sub = periodSub();
   app.innerHTML = `
     <div class="shell">
       <header class="topbar">
@@ -319,16 +377,16 @@ function render() {
         <span id="saveDot" class="save-dot" title="Opgeslagen"></span>
         <button class="icon-btn" data-act="import" aria-label="Bankbestand importeren" title="Importeren">⤓</button>
       </header>
-      ${S.view === 'overzicht' && S.txs.length ? `<div class="pre-main">${safeTotals()}</div>` : ''}
       ${showPeriod ? `
-      <div class="period">
-        <button class="period-btn" data-act="period-prev" aria-label="Vorige periode" ${canPrev ? '' : 'disabled'}>‹</button>
-        <div class="period-label">${esc(periodLabel())}</div>
-        <button class="period-btn" data-act="period-next" aria-label="Volgende periode" ${canNext ? '' : 'disabled'}>›</button>
-      </div>
       <div class="chips" role="tablist" aria-label="Periode">
-        ${[['month', 'Maand'], ['year', 'Jaar'], ['last12', '12 maanden'], ['all', 'Alles'], ['custom', 'Kies datums']].map(([m, l]) => `<button class="chip ${p.mode === m ? 'on' : ''}" data-act="period-mode" data-v="${m}">${l}</button>`).join('')}
+        ${PERIOD_CHIPS.map(([m, l]) => `<button class="chip ${p.mode === m ? 'on' : ''}" data-act="period-mode" data-v="${m}">${l}</button>`).join('')}
+      </div>
+      <div class="period">
+        <button class="period-btn" data-act="period-prev" aria-label="Vorige periode" ${canPrev ? '' : 'disabled'} ${navigable ? '' : 'style="visibility:hidden"'}>‹</button>
+        <div class="period-label">${esc(periodLabel())}${sub ? `<small>${esc(sub)}</small>` : ''}</div>
+        <button class="period-btn" data-act="period-next" aria-label="Volgende periode" ${canNext ? '' : 'disabled'} ${navigable ? '' : 'style="visibility:hidden"'}>›</button>
       </div>` : ''}
+      ${S.view === 'overzicht' && S.txs.length ? `<div class="pre-main">${safeTotals()}</div>` : ''}
       <main id="main">${renderView()}</main>
     </div>
     <nav class="tabbar" aria-label="Hoofdmenu"><div class="tabbar-inner">
@@ -351,6 +409,10 @@ function renderView() {
 
 function afterRender() {
   chartDefaults();
+  // Gekozen periode in beeld schuiven (zonder de pagina zelf te verschuiven)
+  const chips = document.querySelector('.chips');
+  const on = chips && chips.querySelector('.chip.on');
+  if (on) chips.scrollLeft = Math.max(0, on.offsetLeft - chips.clientWidth / 2 + on.clientWidth / 2);
   if (!S.txs.length) return;
   if (S.view === 'overzicht') drawOverviewCharts();
   if (S.view === 'analyse') { if (S.analyse === 'rapport') drawReportCharts(); else drawAnalyseCharts(); }
@@ -428,7 +490,7 @@ function renderOverview() {
 
   return `
     <section class="hero">
-      <p class="hero-label">${s.net >= 0 ? 'Over' : 'Tekort'} in ${esc(periodNoun())}${isPartialMonth() ? ' tot nu toe' : ''}</p>
+      <p class="hero-label">${s.net >= 0 ? 'Over' : 'Tekort'} in ${esc(periodNoun())}${isPartialPeriod() ? ' tot nu toe' : ''}</p>
       <div class="hero-num num ${s.net < 0 ? 'neg' : ''}"><span>${net.main}</span><span class="cents">${net.cents}</span></div>
       <p class="hero-sub">${sub}</p>
       ${shiftNote}
@@ -455,22 +517,6 @@ function renderOverview() {
 
     ${S.period.mode === 'month' ? overviewExpected(S.period.anchor) : ''}
     ${S.period.mode === 'month' && S.period.anchor === currentMonth() ? overviewReportLink() : ''}
-
-    <section>
-      <h2>Uitgaven per categorie <span class="aside">${s.count} uitgaven</span></h2>
-      ${groups.length ? `
-      <div class="donut-wrap">
-        <div class="donut-box"><canvas id="donut" aria-label="Uitgaven per categorie"></canvas><div class="donut-center"><b class="num">${eur(s.expense, true)}</b><small>uitgegeven</small></div></div>
-        <ul class="bars">
-          ${groups.map(([g, v]) => `<li><button class="bar-row" data-act="group" data-v="${g}">
-            <span class="bar-ico">${GROUP_BY_ID[g].icon}</span>
-            <span class="bar-name">${esc(GROUP_BY_ID[g].name)}</span>
-            <span class="bar-val num">${eur(v, true)}</span>
-            <span class="bar-track"><span class="bar-fill" style="width:${(v / groups[0][1]) * 100}%;background:${groupColor(g)}"></span></span>
-          </button></li>`).join('')}
-        </ul>
-      </div>` : '<p class="muted">Geen uitgaven in deze periode.</p>'}
-    </section>
 
     <section>
       <h2>Per maand</h2>
@@ -507,26 +553,29 @@ function renderOverview() {
 
 /* ---------- Totaaloverzicht: vermogen en alle uitgaven ---------- */
 
-const TOT_SCOPES = [['all', 'Alles'], ['year', 'Dit jaar'], ['last12', '12 maanden']];
-
-function totScopePeriod() {
-  if (S.totScope === 'year') return { mode: 'year', anchor: todayIso().slice(0, 4) };
-  if (S.totScope === 'last12') return { mode: 'last12', anchor: S.period.anchor };
-  return { mode: 'all', anchor: S.period.anchor };
-}
-
 function totalsData() {
   const vt = visibleTxs();
-  // Vermogen nu
-  const cur = L.netWorthSeries(vt, S.settings, [currentMonth()])[0];
+  const range = periodRange();
+  const today = todayIso();
+  // Vermogen aan het eind van de gekozen periode (of nu, als die tot vandaag loopt)
+  const now = range.to >= today;
+  const endMonth = now ? currentMonth() : range.to.slice(0, 7);
+  const cur = L.netWorthSeries(vt, S.settings, [endMonth])[0];
   const parts = [];
   if (cur.betaal != null) parts.push({ key: 'betaal', label: 'Betaalrekening', value: cur.betaal, color: cssVar('--s-betaal') });
   parts.push({ key: 'spaar', label: 'Spaarrekening', value: cur.spaar, color: cssVar('--s-spaar') });
-  if (hasBux()) {
+  if (hasBux() && cur.invest > 0) {
     // Verdeling binnen BUX: ETF's, losse aandelen en cash, geschaald naar de waarde van je beleggingen
-    const { rows, pf } = invState();
-    const by = { etf: 0, aandeel: 0, cash: Math.max(0, pf.tot.cash) };
-    for (const r of rows) by[r.type] = (by[r.type] || 0) + (r.value != null ? r.value : r.cost);
+    const by = { etf: 0, aandeel: 0, cash: 0 };
+    if (now) {
+      const { rows, pf } = invState();
+      by.cash = Math.max(0, pf.tot.cash);
+      for (const r of rows) by[r.type] = (by[r.type] || 0) + (r.value != null ? r.value : r.cost);
+    } else {
+      const pf = I.buildPortfolio(S.settings.invest.events, `${L.lastDayOfMonth(endMonth)}T23:59:59`);
+      by.cash = Math.max(0, pf.tot.cash);
+      for (const r of pf.open) by[r.type] = (by[r.type] || 0) + r.cost;
+    }
     const sum = by.etf + by.aandeel + by.cash;
     const k = sum > 0 ? cur.invest / sum : 0;
     parts.push({ key: 'etf', label: "ETF's (BUX)", value: by.etf * k, color: cssVar('--s-etf') });
@@ -536,13 +585,10 @@ function totalsData() {
     parts.push({ key: 'invest', label: 'Beleggingen', value: cur.invest, color: cssVar('--s-invest') });
   }
   const nw = parts.filter((x) => x.value > 0.5);
-  const nwTotal = cur.total;
-  // Uitgaven over de gekozen periode
-  const range = periodRange(totScopePeriod());
   const sum = L.summarize(vt, S.settings, range);
   const groups = Object.entries(sum.byGroup).filter(([, v]) => v > 0.5).sort((a, b) => b[1] - a[1]);
   const exTotal = groups.reduce((a, [, v]) => a + v, 0);
-  return { nw, nwTotal, groups, exTotal, range, expense: sum.expense };
+  return { nw, nwTotal: cur.total, nwTitle: now ? 'Vermogen nu' : `Vermogen eind ${monthLabel(endMonth)}`, groups, exTotal, count: sum.count };
 }
 
 function safeTotals() {
@@ -554,23 +600,21 @@ function renderTotals() {
   const d = totalsData();
   const pct = (v, t) => (t > 0 ? `${Math.round((v / t) * 100)}%` : '');
   const nwSum = d.nw.reduce((a, x) => a + x.value, 0);
-  const since = d.range.from ? monthLabel(d.range.from.slice(0, 7)) : '';
   return `
     <section style="margin-bottom:18px">
       <h2>Totaaloverzicht</h2>
       <div class="tot-grid">
         <div class="panel tot-card">
-          <div class="tot-head"><b>Vermogen nu</b><button class="link" data-act="nav" data-v="vermogen">Details</button></div>
+          <div class="tot-head"><b>${esc(d.nwTitle)}</b><button class="link" data-act="nav" data-v="vermogen">Details</button></div>
           <div class="donut-box tot-donut"><canvas id="donutNw" aria-label="Verdeling van je vermogen"></canvas><div class="donut-center"><b class="num">${eur(d.nwTotal, true)}</b><small>totaal</small></div></div>
           <ul class="tot-legend">
             ${d.nw.map((x) => `<li><i style="background:${x.color}"></i><span class="n">${esc(x.label)}</span><span class="p">${pct(x.value, nwSum)}</span><span class="v num">${eur(x.value, true)}</span></li>`).join('')}
           </ul>
         </div>
         <div class="panel tot-card">
-          <div class="tot-head"><b>Uitgaven totaal</b></div>
-          <div class="seg seg-mini" role="tablist">${TOT_SCOPES.map(([k, l]) => `<button class="${S.totScope === k ? 'on' : ''}" data-act="tot-scope" data-v="${k}">${l}</button>`).join('')}</div>
+          <div class="tot-head"><b>Uitgaven per categorie</b><span class="muted" style="font-size:13px">${d.count} uitgaven</span></div>
           ${d.groups.length ? `
-          <div class="donut-box tot-donut"><canvas id="donutAll" aria-label="Alle uitgaven per categorie"></canvas><div class="donut-center"><b class="num">${eur(d.exTotal, true)}</b><small>${S.totScope === 'all' ? `sinds ${esc(since)}` : 'uitgegeven'}</small></div></div>
+          <div class="donut-box tot-donut"><canvas id="donutAll" aria-label="Uitgaven per categorie"></canvas><div class="donut-center"><b class="num">${eur(d.exTotal, true)}</b><small>uitgegeven</small></div></div>
           <ul class="tot-legend">
             ${d.groups.map(([g, v]) => `<li><button data-act="tot-group" data-v="${g}"><i style="background:${groupColor(g)}"></i><span class="n">${GROUP_BY_ID[g].icon} ${esc(GROUP_BY_ID[g].name)}</span><span class="p">${pct(v, d.exTotal)}</span><span class="v num">${eur(v, true)}</span></button></li>`).join('')}
           </ul>` : '<p class="muted">Geen uitgaven in deze periode.</p>'}
@@ -598,31 +642,13 @@ function drawTotalsCharts() {
   makeChart('donutAll', {
     type: 'doughnut',
     data: { labels: gLabels, datasets: [{ data: d.groups.map(([, v]) => Math.round(v * 100) / 100), backgroundColor: d.groups.map(([g]) => groupColor(g)), borderColor: surface, borderWidth: 2, hoverOffset: 6 }] },
-    options: opts(gLabels, (_e, els) => { if (els.length) openTotGroup(d.groups[els[0].index][0]); }),
+    options: opts(gLabels, (_e, els) => { if (els.length) openGroup(d.groups[els[0].index][0]); }),
   });
-}
-
-function openTotGroup(g) {
-  S.period = totScopePeriod();
-  render();
-  openGroup(g);
 }
 
 function drawOverviewCharts() {
   drawTotalsCharts();
   const vt = visibleTxs();
-  const s = L.summarize(vt, S.settings, periodRange());
-  const groups = Object.entries(s.byGroup).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-  const surface = cssVar('--page');
-  makeChart('donut', {
-    type: 'doughnut',
-    data: { labels: groups.map(([g]) => GROUP_BY_ID[g].name), datasets: [{ data: groups.map(([, v]) => Math.round(v * 100) / 100), backgroundColor: groups.map(([g]) => groupColor(g)), borderColor: surface, borderWidth: 2, hoverOffset: 6 }] },
-    options: {
-      cutout: '70%',
-      plugins: { tooltip: { callbacks: { label: (c) => ` ${c.label}: ${eur(c.raw)}` } } },
-      onClick: (_e, els) => { if (els.length) openGroup(groups[els[0].index][0]); },
-    },
-  });
   const months = chartMonths();
   const data = L.monthly(vt, S.settings, months);
   makeChart('monthBars', {
@@ -2348,13 +2374,15 @@ document.addEventListener('click', (e) => {
     case 'period-next': {
       const d = act === 'period-prev' ? -1 : 1;
       if (S.period.mode === 'month') S.period.anchor = shiftMonth(S.period.anchor, d);
+      if (S.period.mode === 'quarter') S.period.anchor = shiftQuarter(S.period.anchor, d);
       if (S.period.mode === 'year') S.period.anchor = String(Number(S.period.anchor) + d);
       render();
       break;
     }
     case 'period-mode': {
-      if (v === 'month') S.period = { mode: 'month', anchor: S.period.anchor && S.period.mode === 'month' ? S.period.anchor : defaultAnchor() };
-      else if (v === 'year') S.period = { mode: 'year', anchor: (S.period.anchor || defaultAnchor()).slice(0, 4) };
+      if (v === 'month') S.period = { mode: 'month', anchor: currentMonth() };
+      else if (v === 'quarter') S.period = { mode: 'quarter', anchor: currentQuarter() };
+      else if (v === 'year') S.period = { mode: 'year', anchor: currentMonth().slice(0, 4) };
       else if (v === 'custom') { openCustomPeriod(); break; } else S.period = { mode: v, anchor: S.period.anchor };
       render();
       break;
@@ -2400,8 +2428,7 @@ document.addEventListener('click', (e) => {
     }
     case 'analyse-tab': S.analyse = v; render(); break;
     case 'go-analyse': S.view = 'analyse'; S.analyse = v; render(); window.scrollTo(0, 0); break;
-    case 'tot-scope': S.totScope = v; render(); break;
-    case 'tot-group': openTotGroup(v); break;
+    case 'tot-group': openGroup(v); break;
     case 'go-report': S.view = 'analyse'; S.analyse = 'rapport'; S.reportMonth = v; render(); window.scrollTo(0, 0); break;
     case 'report-prev': S.reportMonth = shiftMonth(S.reportMonth || defaultReportMonth(), -1); render(); break;
     case 'report-next': S.reportMonth = shiftMonth(S.reportMonth || defaultReportMonth(), 1); render(); break;
