@@ -5,8 +5,9 @@ import { GROUPS, CATEGORIES, GROUP_BY_ID, catInfo, groupOf, UNCATEGORIZED, UNCAT
 import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
+import * as N from './insights.js';
 
-const VERSION = '1.6.1';
+const VERSION = '1.7.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -29,7 +30,8 @@ const S = {
   view: 'overzicht',
   period: { mode: 'month', anchor: null, from: null, to: null },
   tx: { q: '', kind: 'all', cat: '', sort: 'new', scope: 'period', limit: 150 },
-  analyse: 'categorie',
+  analyse: 'rapport',
+  reportMonth: null,
   nwTab: 'totaal',
   inv: { kind: 'all', limit: 60 },
   trendGroups: null,
@@ -304,7 +306,7 @@ const TAB_NAMES = { overzicht: 'Overzicht', transacties: 'Transacties', analyse:
 function render() {
   destroyCharts();
   const app = $('#app');
-  const showPeriod = ['overzicht', 'transacties', 'analyse'].includes(S.view) && S.txs.length;
+  const showPeriod = (['overzicht', 'transacties'].includes(S.view) || (S.view === 'analyse' && !['rapport', 'vast', 'reizen'].includes(S.analyse))) && S.txs.length;
   const p = S.period;
   const ms = dataMonths();
   const canPrev = p.mode === 'month' ? ms.length && p.anchor > ms[0] : p.mode === 'year' ? ms.length && p.anchor > ms[0].slice(0, 4) : false;
@@ -349,7 +351,7 @@ function afterRender() {
   chartDefaults();
   if (!S.txs.length) return;
   if (S.view === 'overzicht') drawOverviewCharts();
-  if (S.view === 'analyse') drawAnalyseCharts();
+  if (S.view === 'analyse') { if (S.analyse === 'rapport') drawReportCharts(); else drawAnalyseCharts(); }
   if (S.view === 'vermogen') { if (S.nwTab === 'beleggen' && hasBux()) drawInvestChart(); else drawNetWorthChart(); }
   if (S.view === 'transacties') {
     const inp = $('#txSearch');
@@ -436,6 +438,7 @@ function renderOverview() {
       </div>
     </section>
 
+    ${importReminder()}
     ${uncategorized ? `<button class="banner" data-act="quick"><div><b>${uncategorized} ${uncategorized === 1 ? 'transactie' : 'transacties'} nog niet ingedeeld</b><span>Deel ze in, dan onthoudt de app het voor de volgende keer.</span></div><span class="go">Indelen</span></button>` : ''}
     ${guessed ? `<button class="banner" data-act="guesses"><div><b>${guessed} ${guessed === 1 ? 'transactie' : 'transacties'} geschat ingedeeld</b><span>Niet herkend, dus de app heeft een categorie gegokt. Bevestig of verbeter ze, dan weet de app het zeker.</span></div><span class="go">Nalopen</span></button>` : ''}
     ${unmatched ? `<button class="banner" data-act="unmatched"><div><b>${unmatched} ${unmatched === 1 ? 'terugbetaling' : 'terugbetalingen'} niet gekoppeld</b><span>Geen uitgave met precies dat bedrag gevonden. Koppel ze zelf.</span></div><span class="go">Bekijken</span></button>` : ''}
@@ -447,6 +450,9 @@ function renderOverview() {
         <div class="stat"><div class="stat-label">Opzij gezet</div><div class="stat-value num">${eur(moved, true)}</div><div class="stat-delta">${s.shifted > 0 ? `plus ${eur(s.shifted, true)} van sparen naar beleggen` : s.income > 0 && moved > 0 ? `${Math.round((moved / s.income) * 100)}% van je inkomen` : ''}</div></div>
       </div>
     </section>
+
+    ${S.period.mode === 'month' ? overviewExpected(S.period.anchor) : ''}
+    ${S.period.mode === 'month' && S.period.anchor === currentMonth() ? overviewReportLink() : ''}
 
     <section>
       <h2>Uitgaven per categorie <span class="aside">${s.count} uitgaven</span></h2>
@@ -884,9 +890,259 @@ function openGroup(gid) {
 
 /* ---------- Analyse ---------- */
 
+/* ---------- Inzichten: vaste lasten, reizen, maandrapport ---------- */
+
+function recurringData() { return N.detectRecurring(visibleTxs(), S.settings); }
+
+function importReminder() {
+  const last = (S.settings.imports || []).slice(-1)[0];
+  const end = N.dataEnd(visibleTxs(), S.settings);
+  if (!end) return '';
+  const days = Math.round((new Date(todayIso()) - new Date(end)) / 86400000);
+  if (days < 14) return '';
+  return `<button class="banner" data-act="howto"><div><b>Je gegevens lopen tot ${fmtDate(end, false)}</b><span>Dat is ${days} dagen geleden${last ? `, laatste import op ${fmtDate(last.date, false)}` : ''}. Download een nieuw bestand bij ABN AMRO (kies "Vanaf laatste download") en importeer het.</span></div><span class="go">Hoe</span></button>`;
+}
+
+function recRow(r, opts = {}) {
+  const cat = catInfo(r.category);
+  const g = groupOf(r.category);
+  const pos = r.amount > 0;
+  return `<div class="tx pos-row">
+    <span class="tx-ico" style="background:color-mix(in srgb, ${g.color} 16%, transparent)">${cat.icon}</span>
+    <span class="tx-main"><div class="tx-name">${esc(r.name)}</div><div class="tx-sub">${esc(opts.sub || `${cat.name}, rond de ${r.day}e`)}${r.periodic ? '<span class="tag">periodiek</span>' : ''}${opts.done === true ? '<span class="tag ok">al betaald</span>' : opts.done === false ? '<span class="tag acc">verwacht</span>' : ''}</div></span>
+    <span class="tx-amt num ${pos ? 'in' : ''}"><span class="amt">${pos ? '+' : '−'}${eur(Math.abs(r.amount))}</span>${opts.right ? `<small>${esc(opts.right)}</small>` : ''}</span>
+  </div>`;
+}
+
+function overviewExpected(mk) {
+  const rec = recurringData();
+  if (!rec.active.length) return '';
+  const items = N.expectedInMonth(rec, visibleTxs(), mk);
+  if (!items.length) return '';
+  const open = items.filter((r) => !r.done);
+  const outOpen = -open.filter((r) => r.amount < 0).reduce((a, r) => a + r.amount, 0);
+  const inOpen = open.filter((r) => r.amount > 0).reduce((a, r) => a + r.amount, 0);
+  const show = (open.length ? open : items).slice(0, 4);
+  return `<section>
+    <h2>${open.length ? 'Nog verwacht deze maand' : 'Vaste posten deze maand'} <span class="aside">${open.length ? [outOpen ? `${eur(outOpen, true)} eruit` : '', inOpen ? `${eur(inOpen, true)} erin` : ''].filter(Boolean).join(', ') : 'alles binnen'}</span></h2>
+    <div class="tx-list">${show.map((r) => recRow(r, { done: r.done, right: fmtDate(r.date, false) })).join('')}</div>
+    <button class="link" style="margin-top:8px" data-act="go-analyse" data-v="vast">Alle vaste lasten (${rec.active.length})</button>
+  </section>`;
+}
+
+function defaultReportMonth() {
+  const end = N.dataEnd(visibleTxs(), S.settings) || todayIso();
+  const prev = shiftMonth(currentMonth(), -1);
+  return end.slice(0, 7) >= prev ? prev : end.slice(0, 7);
+}
+
+function overviewReportLink() {
+  const mk = defaultReportMonth();
+  const r = N.monthReport(visibleTxs(), S.settings, mk);
+  return `<button class="banner report-link" data-act="go-report" data-v="${mk}"><div><b>Maandafsluiting ${monthLabel(mk)}</b><span>${r.s.net >= 0 ? 'Over' : 'Tekort'}: ${eur(r.s.net, true)}. Uitgaven ${eur(r.s.expense, true)}${r.avg.expense ? `, gemiddeld ${eur(r.avg.expense, true)}` : ''}. ${r.highlights.length} opvallende punten.</span></div><span class="go">Bekijken</span></button>`;
+}
+
+function renderRecurring() {
+  const rec = recurringData();
+  const fc = N.forecast(rec, shiftMonth(rec.ref.slice(0, 7) || currentMonth(), 1), 3);
+  const groupsOf = (kind) => rec.active.filter((r) => r.kind === kind);
+  const exp = groupsOf('expense');
+  const inc = groupsOf('income');
+  const tr = groupsOf('transfer');
+  const list = (arr) => arr.length ? `<div class="tx-list">${arr.map((r) => recRow(r, { right: `volgende ${fmtDate(r.next, false)}` })).join('')}</div>` : '<p class="muted">Niets gevonden.</p>';
+  return `
+    <section>
+      <p class="help" style="margin-top:0">Automatisch herkend: alles wat twee maanden op rij terugkomt met ongeveer hetzelfde bedrag, wordt als vaste post gezien en vooruit voorspeld. Komt het een keer niet, dan staat het bij Gestopt. Gebaseerd op je gegevens tot ${rec.ref ? fmtDate(rec.ref) : '-'}.</p>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Vaste uitgaven</div><div class="stat-value num">${eur(rec.monthly.expense, true)}</div><div class="stat-delta">per maand, ${exp.length} ${exp.length === 1 ? 'post' : 'posten'}</div></div>
+        <div class="stat"><div class="stat-label">Vaste inkomsten</div><div class="stat-value num">${eur(rec.monthly.income, true)}</div><div class="stat-delta">${inc.length} ${inc.length === 1 ? 'post' : 'posten'}</div></div>
+        <div class="stat"><div class="stat-label">Sparen en beleggen</div><div class="stat-value num">${eur(rec.monthly.transfer, true)}</div><div class="stat-delta">${tr.length} vaste overboekingen</div></div>
+      </div>
+    </section>
+    <section>
+      <h2>Voorspelling</h2>
+      <table class="tbl"><thead><tr><th>Maand</th><th class="r">Vast binnen</th><th class="r">Vast eruit</th><th class="r">Sparen en beleggen</th></tr></thead><tbody>
+        ${fc.map((f) => `<tr><td>${monthLabel(f.month)}</td><td class="r num">${eur(f.income)}</td><td class="r num">${eur(f.expense)}</td><td class="r num">${eur(f.transfer)}</td></tr>`).join('')}
+      </tbody></table>
+      <p class="help">Alleen wat al minstens twee maanden op rij terugkwam. Je salaris verschijnt hier vanaf de tweede uitbetaling.</p>
+    </section>
+    <section><h2>Vaste uitgaven <span class="aside">${eur(rec.monthly.expense)} per maand</span></h2>${list(exp)}</section>
+    ${inc.length ? `<section><h2>Vaste inkomsten</h2>${list(inc)}</section>` : ''}
+    ${tr.length ? `<section><h2>Vaste overboekingen naar sparen en beleggen</h2>${list(tr)}</section>` : ''}
+    ${rec.stopped.length ? `<section><h2>Gestopt <span class="aside">laatste 6 maanden</span></h2><div class="tx-list">${rec.stopped.map((r) => recRow(r, { sub: `${catInfo(r.category).name}, ${r.count} keer, laatst ${fmtDate(r.last, false)}`, right: 'gestopt' })).join('')}</div></section>` : ''}`;
+}
+
+const TRIP_COLORS = ['var(--s-income)', 'var(--s-expense)', '#1baf7a', '#6250d6', '#eda100', '#e87ba4', '#0e7490'];
+
+function renderTrips() {
+  const trips = N.detectTrips(visibleTxs(), S.settings);
+  if (!trips.length) return '<div class="empty"><h3>Nog geen reizen gevonden</h3><p>Reizen worden automatisch herkend aan pinbetalingen in het buitenland, vluchten, hotels, vakantie-Tikkies en geld naar Revolut.</p></div>';
+  const total = trips.reduce((a, t) => a + t.total, 0);
+  return `
+    <section>
+      <p class="help" style="margin-top:0">Automatisch samengesteld uit pinbetalingen in het buitenland, vluchten, verblijf, vakantie-Tikkies en geld naar Revolut. Boekingen tot vijf maanden vooraf tellen mee.</p>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Reizen</div><div class="stat-value num">${trips.length}</div></div>
+        <div class="stat"><div class="stat-label">Totaal</div><div class="stat-value num">${eur(total, true)}</div></div>
+        <div class="stat"><div class="stat-label">Gemiddeld</div><div class="stat-value num">${eur(total / trips.length, true)}</div><div class="stat-delta">per reis</div></div>
+      </div>
+    </section>
+    ${trips.map((tr) => {
+      const cats = Object.entries(tr.byCat).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+      const sum = cats.reduce((a, [, v]) => a + v, 0) || 1;
+      return `<section><button class="trip" data-act="trip" data-v="${esc(tr.id)}">
+        <div class="trip-head"><b>${esc(tr.name)}</b><span class="num">${eur(tr.total)}</span></div>
+        <div class="trip-sub">${fmtDate(tr.from, true)}${tr.to !== tr.from ? ` tot ${fmtDate(tr.to, true)}` : ''}${tr.days > 1 ? `, ${tr.days} dagen` : ''}${tr.perDay ? `, ${eur(tr.perDay)} per dag` : ''}${tr.bookedFrom < tr.from ? `. Geboekt vanaf ${fmtDate(tr.bookedFrom, false)}` : ''}</div>
+        <div class="ribbon" style="height:10px;margin-top:10px">${cats.map(([c, v], i) => `<span style="flex-grow:${v};background:${TRIP_COLORS[i % TRIP_COLORS.length]}" title="${esc(catInfo(c).name)}"></span>`).join('')}</div>
+        <div class="ribbon-legend">${cats.slice(0, 5).map(([c, v], i) => `<span><i style="background:${TRIP_COLORS[i % TRIP_COLORS.length]}"></i>${esc(catInfo(c).name)} ${eur(v, true)}</span>`).join('')}</div>
+      </button></section>`;
+    }).join('')}`;
+}
+
+function openTrip(id) {
+  const tr = N.detectTrips(visibleTxs(), S.settings).find((t) => t.id === id);
+  if (!tr) return;
+  const rmap = L.reimbursementMap(S.txs);
+  const items = S.txs.filter((t) => tr.ids.includes(t.id)).sort((a, b) => a.date.localeCompare(b.date));
+  openSheet({
+    title: tr.name,
+    body: `
+      <div class="detail-amt num">${eur(tr.total)}</div>
+      <div class="muted">${fmtDate(tr.from)} tot ${fmtDate(tr.to)}, ${tr.count} transacties</div>
+      <dl class="kv">
+        ${tr.days > 1 ? `<dt>Duur</dt><dd>${tr.days} dagen</dd>` : ''}
+        ${tr.perDay ? `<dt>Per dag</dt><dd class="num">${eur(tr.perDay)}</dd>` : ''}
+        ${tr.countries.length ? `<dt>Landen</dt><dd>${esc(tr.countries.join(', '))}</dd>` : ''}
+        ${tr.city ? `<dt>Meeste uitgaven in</dt><dd>${esc(tr.city)}</dd>` : ''}
+      </dl>
+      <div class="tx-list">${items.map((t) => txRow(t, rmap)).join('')}</div>`,
+  });
+}
+
+function renderReport() {
+  const mk = S.reportMonth || defaultReportMonth();
+  const vt = visibleTxs();
+  const rec = recurringData();
+  const r = N.monthReport(vt, S.settings, mk, { recurring: rec });
+  const ms = dataMonths();
+  const canPrev = ms.length && mk > ms[0];
+  const canNext = mk < (ms[ms.length - 1] || mk);
+  const rmap = L.reimbursementMap(vt);
+  const s = r.s;
+  const dlt = (cur, ref, inverse) => {
+    if (ref == null || !isFinite(ref)) return '';
+    const d = cur - ref;
+    if (Math.abs(d) < 1) return 'gelijk';
+    return `${d > 0 ? '+' : '−'}${eur(Math.abs(d), true)}`;
+  };
+  const nw = r.networth;
+  const nwd = (k) => (nw.prev && nw.cur && nw.prev[k] != null && nw.cur[k] != null ? nw.cur[k] - nw.prev[k] : null);
+  const moved = s.saved + s.invested;
+  const wdMax = Math.max(...r.patterns.weekday, 1);
+  return `
+    <div class="period" style="padding:0 0 6px">
+      <button class="period-btn" data-act="report-prev" aria-label="Vorige maand" ${canPrev ? '' : 'disabled'}>‹</button>
+      <div class="period-label">${monthLabel(mk)}</div>
+      <button class="period-btn" data-act="report-next" aria-label="Volgende maand" ${canNext ? '' : 'disabled'}>›</button>
+    </div>
+    ${r.complete ? '' : `<div class="callout">Deze maand is nog niet compleet: je gegevens lopen tot ${fmtDate(r.dataEnd, false)}.</div>`}
+
+    <section class="hero">
+      <p class="hero-label">${s.net >= 0 ? 'Over' : 'Tekort'} in ${monthLabel(mk)}</p>
+      <div class="hero-num num">${splitEur(s.net).main}<span class="cents">${splitEur(s.net).cents}</span></div>
+      <p class="hero-sub">${s.income ? `Spaarquote ${Math.round(((s.net) / s.income) * 100)}%. ` : ''}${moved ? `Opzij gezet: ${eur(moved)}.` : ''}${s.shifted ? ` Van sparen naar beleggen verplaatst: ${eur(s.shifted)}.` : ''}</p>
+    </section>
+
+    <section>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Inkomsten</div><div class="stat-value num">${eur(s.income, true)}</div><div class="stat-delta">vs vorige: ${dlt(s.income, r.ps.income)}</div><div class="stat-delta">vs gem.: ${dlt(s.income, r.avg.income)}</div></div>
+        <div class="stat"><div class="stat-label">Uitgaven</div><div class="stat-value num">${eur(s.expense, true)}</div><div class="stat-delta">vs vorige: ${dlt(s.expense, r.ps.expense)}</div><div class="stat-delta">vs gem.: ${dlt(s.expense, r.avg.expense)}</div></div>
+        <div class="stat"><div class="stat-label">Opzij gezet</div><div class="stat-value num">${eur(moved, true)}</div><div class="stat-delta">vs vorige: ${dlt(moved, r.ps.saved + r.ps.invested)}</div><div class="stat-delta">vs gem.: ${dlt(moved, r.avg.saved)}</div></div>
+      </div>
+      <p class="help">Gemiddelde over ${r.histCount} ${r.histCount === 1 ? 'maand' : 'maanden'} ervoor.</p>
+    </section>
+
+    ${r.highlights.length ? `<section><h2>Opvallend</h2><ul class="hl">${r.highlights.map((h) => `<li class="hl-${h.tone}">${esc(h.text)}</li>`).join('')}</ul></section>` : ''}
+
+    <section>
+      <h2>Per categorie</h2>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Categorie</th><th class="r">Deze maand</th><th class="r">Vorige</th><th class="r">Gem.</th></tr></thead><tbody>
+        ${r.groupRows.map((g) => `<tr data-act="report-group" data-v="${mk}|${g.group}" style="cursor:pointer"><td>${GROUP_BY_ID[g.group]?.icon || ''} ${esc(GROUP_BY_ID[g.group]?.name || g.group)}</td><td class="r num">${eur(g.cur, true)}</td><td class="r num">${eur(g.prev, true)}</td><td class="r num">${g.avg != null ? eur(g.avg, true) : '-'}</td></tr>`).join('')}
+      </tbody></table></div>
+    </section>
+
+    ${r.biggest.length ? `<section><h2>Grootste uitgaven</h2><div class="tx-list">${r.biggest.map((t) => txRow(t, rmap)).join('')}</div></section>` : ''}
+
+    <section>
+      <h2>Vaste posten <span class="aside">${eur(r.recurring.fixedOut)} vaste uitgaven</span></h2>
+      ${r.recurring.paid.length ? `<div class="tx-list">${r.recurring.paid.sort((a, b) => a.date.localeCompare(b.date)).map((t) => txRow(t, rmap)).join('')}</div>` : '<p class="muted">Geen vaste posten herkend in deze maand.</p>'}
+      ${r.recurring.started.length ? `<p class="help">Nieuw: ${r.recurring.started.map((x) => esc(x.name)).join(', ')}.</p>` : ''}
+      ${r.recurring.stopped.length ? `<p class="help">Gestopt: ${r.recurring.stopped.map((x) => esc(x.name)).join(', ')}.</p>` : ''}
+    </section>
+
+    ${r.newMerchants.length ? `<section><h2>Voor het eerst <span class="aside">${r.newMerchants.length}</span></h2><table class="tbl"><tbody>${r.newMerchants.slice(0, 10).map((m) => `<tr><td>${catInfo(m.category).icon} ${esc(m.name)}</td><td class="r num">${eur(m.total)}</td></tr>`).join('')}</tbody></table></section>` : ''}
+
+    ${(r.refunds.total || r.refunds.tikkiesOut) ? `<section>
+      <h2>Tikkies en terugbetalingen</h2>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Terugbetaald</div><div class="stat-value num">${eur(r.refunds.total, true)}</div><div class="stat-delta">${r.refunds.list.length} keer</div></div>
+        <div class="stat"><div class="stat-label">Tikkies ontvangen</div><div class="stat-value num">${eur(r.refunds.tikkiesInTotal, true)}</div><div class="stat-delta">${r.refunds.tikkiesIn} keer</div></div>
+        <div class="stat"><div class="stat-label">Tikkies betaald</div><div class="stat-value num">${eur(r.refunds.tikkiesOutTotal, true)}</div><div class="stat-delta">${r.refunds.tikkiesOut} keer</div></div>
+      </div>
+    </section>` : ''}
+
+    ${r.trips.length ? `<section><h2>Reizen</h2>${r.trips.map((tr) => `<button class="trip" data-act="trip" data-v="${esc(tr.id)}"><div class="trip-head"><b>${esc(tr.name)}</b><span class="num">${eur(tr.total)}</span></div><div class="trip-sub">${fmtDate(tr.from, false)} tot ${fmtDate(tr.to, false)}</div></button>`).join('')}</section>` : ''}
+
+    <section>
+      <h2>Patronen</h2>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Per dag</div><div class="stat-value num">${r.patterns.perDayAvg != null ? eur(r.patterns.perDayAvg) : '-'}</div><div class="stat-delta">${r.patterns.daysWithSpend} van ${r.patterns.daysCounted} dagen uitgaven</div></div>
+        <div class="stat"><div class="stat-label">Weekend</div><div class="stat-value num">${eur(r.patterns.weekend, true)}</div><div class="stat-delta">doordeweeks ${eur(r.patterns.week, true)}</div></div>
+        <div class="stat"><div class="stat-label">Duurste dag</div><div class="stat-value num">${r.patterns.topDay ? eur(r.patterns.topDay[1], true) : '-'}</div><div class="stat-delta">${r.patterns.topDay ? fmtDate(r.patterns.topDay[0], false) : ''}</div></div>
+      </div>
+      <div class="panel" style="margin-top:10px"><div class="chart-box" style="height:150px"><canvas id="reportWeekday" aria-label="Uitgaven per weekdag"></canvas></div></div>
+      <p class="help">${r.patterns.txCount} transacties, ${r.patterns.cardCount} pinbetalingen${r.patterns.cashOut ? `, ${eur(r.patterns.cashOut)} contant opgenomen` : ''}.</p>
+    </section>
+
+    <section>
+      <h2>Vermogen eind ${monthLabel(mk)}</h2>
+      <table class="tbl"><thead><tr><th></th><th class="r">Stand</th><th class="r">Verschil</th></tr></thead><tbody>
+        ${[['betaal', 'Betaalrekening'], ['spaar', 'Sparen'], ['invest', 'Beleggen'], ['total', 'Totaal']].map(([k, l]) => `<tr${k === 'total' ? ' style="font-weight:700"' : ''}><td>${l}</td><td class="r num">${nw.cur && nw.cur[k] != null ? eur(nw.cur[k]) : '-'}</td><td class="r num">${nwd(k) != null ? sgn(nwd(k)) : ''}</td></tr>`).join('')}
+      </tbody></table>
+    </section>
+
+    ${r.invest ? `<section>
+      <h2>Beleggingen in ${monthLabel(mk, false)}</h2>
+      <table class="tbl"><tbody>
+        <tr><td>Gestort bij BUX</td><td class="r num">${eur(r.invest.deposits)}</td></tr>
+        <tr><td>Aankopen</td><td class="r num">${r.invest.buys}× ${eur(r.invest.buyAmount)}</td></tr>
+        ${r.invest.sells ? `<tr><td>Verkopen</td><td class="r num">${r.invest.sells}×</td></tr>` : ''}
+        <tr><td>Dividend</td><td class="r num">${eur(r.invest.dividends)}</td></tr>
+        <tr><td>Kosten</td><td class="r num">${eur(r.invest.fees)}</td></tr>
+        ${r.invest.other ? `<tr><td>Rente en uitlenen</td><td class="r num">${eur(r.invest.other)}</td></tr>` : ''}
+      </tbody></table>
+      ${r.invest.names.length ? `<p class="help">Gekocht: ${esc(r.invest.names.join(', '))}.</p>` : ''}
+    </section>` : ''}
+
+    ${(r.quality.guessed || r.quality.uncategorized) ? `<p class="help">${r.quality.uncategorized ? `${r.quality.uncategorized} niet ingedeeld. ` : ''}${r.quality.guessed ? `${r.quality.guessed} geschat ingedeeld.` : ''}</p>` : ''}`;
+}
+
+function drawReportCharts() {
+  const mk = S.reportMonth || defaultReportMonth();
+  const r = N.monthReport(visibleTxs(), S.settings, mk);
+  makeChart('reportWeekday', {
+    type: 'bar',
+    data: { labels: WEEKDAYS, datasets: [{ label: 'Uitgaven', data: r.patterns.weekday.map((v) => Math.round(v)), backgroundColor: cssVar('--s-expense'), borderRadius: 4, maxBarThickness: 26 }] },
+    options: { scales: { x: { grid: { display: false }, border: { display: false } }, y: euroAxis }, plugins: { tooltip: { callbacks: { label: (c) => ` ${eur(c.raw)}` } } } },
+  });
+}
+
 function renderAnalyse() {
   const tab = S.analyse;
-  const seg = `<div class="seg" role="tablist">${[['categorie', 'Categorieën'], ['trend', 'Trend'], ['winkels', 'Winkels'], ['patronen', 'Patronen']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="analyse-tab" data-v="${k}">${l}</button>`).join('')}</div>`;
+  const seg = `<div class="seg seg-scroll" role="tablist">${[['rapport', 'Maandrapport'], ['vast', 'Vaste lasten'], ['reizen', 'Reizen'], ['categorie', 'Categorieën'], ['trend', 'Trend'], ['winkels', 'Winkels'], ['patronen', 'Patronen']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="analyse-tab" data-v="${k}">${l}</button>`).join('')}</div>`;
+  if (tab === 'rapport') return seg + renderReport();
+  if (tab === 'vast') return seg + renderRecurring();
+  if (tab === 'reizen') return seg + renderTrips();
   const vt = visibleTxs();
   const range = periodRange();
   const s = L.summarize(vt, S.settings, range);
@@ -2037,6 +2293,12 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'analyse-tab': S.analyse = v; render(); break;
+    case 'go-analyse': S.view = 'analyse'; S.analyse = v; render(); window.scrollTo(0, 0); break;
+    case 'go-report': S.view = 'analyse'; S.analyse = 'rapport'; S.reportMonth = v; render(); window.scrollTo(0, 0); break;
+    case 'report-prev': S.reportMonth = shiftMonth(S.reportMonth || defaultReportMonth(), -1); render(); break;
+    case 'report-next': S.reportMonth = shiftMonth(S.reportMonth || defaultReportMonth(), 1); render(); break;
+    case 'trip': closeSheet(); setTimeout(() => openTrip(v), 0); break;
+    case 'report-group': { const [m, g] = v.split('|'); S.period = { mode: 'month', anchor: m }; openGroup(g); break; }
     case 'trend-toggle': {
       const set = new Set(S.trendGroups || []);
       if (set.has(v)) set.delete(v); else if (set.size < 4) set.add(v); else { toast('Maximaal vier tegelijk'); break; }

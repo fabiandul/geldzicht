@@ -404,3 +404,20 @@ details.raw pre { white-space: pre-wrap; word-break: break-all; background: var(
 .pos-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .pos-grid .input, .pos-grid select { padding: 9px 8px; font-size: 14px; min-width: 0; }
 @media (max-width: 420px) { .pos-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Inzichten */
+.seg-scroll { justify-content: flex-start; }
+.seg-scroll button { flex: none; }
+.hl { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.hl li { background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius-m); padding: 10px 12px 10px 34px; position: relative; font-size: 14px; }
+.hl li::before { position: absolute; left: 12px; top: 10px; font-weight: 800; }
+.hl-up::before { content: '↑'; color: var(--accent); }
+.hl-down::before { content: '↓'; color: var(--pos); }
+.hl-info::before { content: '•'; color: var(--muted); }
+.trip { display: block; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--radius-l); padding: 14px; }
+.trip + .trip { margin-top: 8px; }
+.trip-head { display: flex; justify-content: space-between; gap: 10px; font-size: 15.5px; }
+.trip-head span { font-weight: 750; white-space: nowrap; }
+.trip-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.tbl-wrap { overflow-x: auto; }
+.report-link { background: var(--surface); border: 1px solid var(--line); }
