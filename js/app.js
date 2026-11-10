@@ -6,7 +6,7 @@ import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -2225,4 +2225,15 @@ async function start() {
 start();
 
 // Voor testen in de console
-window.geldzicht = { S, L, render, onRemote };
+window.geldzicht = {
+  S, L, render, onRemote,
+  // Categorie van transacties vastzetten (zoals handmatig kiezen)
+  setCategory(ids, category) {
+    const list = S.txs.filter((t) => ids.includes(t.id));
+    for (const t of list) { t.category = category; t.manual = true; t.by = 'handmatig'; delete t.unmatched; }
+    markTx(...list);
+    recompute();
+    render();
+    return list.length;
+  },
+};

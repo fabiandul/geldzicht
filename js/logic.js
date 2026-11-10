@@ -137,6 +137,8 @@ function guess(tx, learned) {
       if (abs <= 6) return { category: 'koffie', by: 'gok' };
       if (TERMINAL.test(tx.name || '')) return { category: hour != null && hour >= 16 ? 'restaurant' : 'koffie', by: 'gok' };
       if (abs >= 150) return { category: 'warenhuis', by: 'gok' };
+      // Pinbetaling in het buitenland: uitgave op reis
+      if (/Land:\s*(?!NL|NLD\b)[A-Z]{2,3}/.test(tx.desc || '')) return { category: 'reis-uitgaven', by: 'gok' };
       return { category: 'overig-uitgave', by: 'gok' };
     }
     if (/iDEAL/i.test(tx.type)) return { category: 'online', by: 'gok' };

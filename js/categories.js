@@ -18,6 +18,11 @@ export const GROUPS = [
   { id: 'gezondheid', name: 'Gezondheid', icon: '💊', color: '#9d174d', type: 'expense' },
   { id: 'verzekeringen', name: 'Verzekeringen', icon: '🛡️', color: '#475569', type: 'expense', fixed: true },
   { id: 'financieel', name: 'Belasting en bank', icon: '🏦', color: '#78716c', type: 'expense' },
+  { id: 'personen', name: 'Familie en vrienden', icon: '👥', color: '#c026d3', type: 'expense' },
+  { id: 'opleiding', name: 'Opleiding', icon: '🎓', color: '#65a30d', type: 'expense' },
+  { id: 'goededoelen', name: 'Goede doelen', icon: '❤️', color: '#be123c', type: 'expense' },
+  { id: 'huisdieren', name: 'Huisdieren', icon: '🐾', color: '#a16207', type: 'expense' },
+  { id: 'contant', name: 'Contant geld', icon: '💵', color: '#64748b', type: 'expense' },
   { id: 'overig', name: 'Overig', icon: '📦', color: '#a8a29e', type: 'expense' },
   { id: 'inkomen', name: 'Inkomsten', icon: '💶', color: '#0f8a5f', type: 'income' },
   { id: 'overboeking', name: 'Sparen en beleggen', icon: '🔁', color: '#5b6b78', type: 'transfer' },
@@ -95,6 +100,8 @@ export const CATEGORIES = [
   { id: 'verblijf', group: 'reizen', name: 'Hotels en verblijf', icon: '🏨', kw: ['booking com', 'booking', 'airbnb', 'hotels com', 'expedia', 'agoda', 'trivago', 'hostelworld', 'center parcs', 'landal', 'roompot', 'hotel*', 'hostel', 'camping', 'bed breakfast', 'nh hotel', 'ibis', 'accor', 'marriott', 'hilton', 'van der valk hotel'] },
   { id: 'vakantie', group: 'reizen', name: 'Vakanties en reisorganisaties', icon: '🏖️', kw: ['tui', 'sunweb', 'd reizen', 'dreizen', 'corendon vakanties', 'neckermann', 'vakantiediscounter', 'eliza was here', 'travelbird', 'anwb reizen', 'snowtrex', 'skipas', 'skiverhuur', 'getyourguide', 'viator', 'klook'] },
 
+  { id: 'reis-uitgaven', group: 'reizen', name: 'Uitgaven op reis', icon: '🧳', dir: 'out', kw: [] },
+
   // Gezondheid
   { id: 'zorgverzekering', group: 'gezondheid', name: 'Zorgverzekering', icon: '🩺', dir: 'out', kw: ['zilveren kruis', 'cz groep', 'cz', 'vgz', 'menzis', 'dsw', 'onvz', 'fbto', 'ditzo', 'zekur', 'anderzorg', 'ohra zorg', 'interpolis zorg', 'univé zorg', 'unive zorg', 'zorg en zekerheid', 'pnozorg', 'salland', 'eno', 'de friesland', 'iza', 'zorgverzekering', 'eigen risico', 'stad holland'] },
   { id: 'apotheek', group: 'gezondheid', name: 'Apotheek', icon: '💊', kw: ['apotheek', 'apotheker', 'benu', 'mediq', 'service apotheek', 'farmacie'] },
@@ -110,12 +117,12 @@ export const CATEGORIES = [
   { id: 'creditcard', group: 'financieel', name: 'Creditcard aflossing', icon: '💳', dir: 'out', kw: ['international card services', 'ics', 'icscards', 'creditcard', 'american express', 'amex'] },
 
   // Overig
-  { id: 'contant', group: 'overig', name: 'Contant geld', icon: '💵', dir: 'out', kw: ['geldmaat', 'geldautomaat', 'gea', 'cash withdrawal', 'opname'] },
-  { id: 'tikkie-betaald', group: 'overig', name: 'Tikkies betaald', icon: '🤝', dir: 'out', kw: ['tikkie', 'aab inz tikkie', 'betaalverzoek', 'wero betaalverzoek'] },
-  { id: 'goededoelen', group: 'overig', name: 'Goede doelen', icon: '❤️', dir: 'out', kw: ['kwf', 'rode kruis', 'unicef', 'artsen zonder grenzen', 'greenpeace', 'wnf', 'wereld natuur fonds', 'amnesty', 'hartstichting', 'nierstichting', 'longfonds', 'alzheimer', 'stichting vluchteling', 'giro555', 'warchild', 'war child', 'plan nederland', 'natuurmonumenten', 'staatsbosbeheer', 'collecte', 'donatie', 'gift'] },
-  { id: 'huisdieren', group: 'overig', name: 'Huisdieren', icon: '🐾', kw: ['pets place', 'jumper', 'discus', 'zooplus', 'dierenarts*', 'dierenkliniek', 'dierenspeciaalzaak', 'ranzijn dier', 'petsplace', 'medpets', 'brekz', 'bitiba'] },
-  { id: 'opleiding', group: 'overig', name: 'Opleiding en cursussen', icon: '🎓', dir: 'out', kw: ['rijschool', 'rijles*', 'cbr', 'cursus*', 'opleiding*', 'studieboeken', 'hogeschool', 'universiteit', 'examen*', 'lesgeld', 'collegegeld', 'studiekosten', 'inholland'] },
-  { id: 'overboeking-persoon', group: 'overig', name: 'Betaald aan personen', icon: '👤', dir: 'out', kw: [] },
+  { id: 'contant', group: 'contant', name: 'Contant geld', icon: '💵', dir: 'out', kw: ['geldmaat', 'geldautomaat', 'gea', 'cash withdrawal', 'opname'] },
+  { id: 'tikkie-betaald', group: 'personen', name: 'Tikkies betaald', icon: '🤝', dir: 'out', kw: ['tikkie', 'aab inz tikkie', 'betaalverzoek', 'wero betaalverzoek'] },
+  { id: 'goededoelen', group: 'goededoelen', name: 'Goede doelen', icon: '❤️', dir: 'out', kw: ['kwf', 'rode kruis', 'unicef', 'artsen zonder grenzen', 'greenpeace', 'wnf', 'wereld natuur fonds', 'amnesty', 'hartstichting', 'nierstichting', 'longfonds', 'alzheimer', 'stichting vluchteling', 'giro555', 'warchild', 'war child', 'plan nederland', 'natuurmonumenten', 'staatsbosbeheer', 'collecte', 'donatie', 'gift'] },
+  { id: 'huisdieren', group: 'huisdieren', name: 'Huisdieren', icon: '🐾', kw: ['pets place', 'jumper', 'discus', 'zooplus', 'dierenarts*', 'dierenkliniek', 'dierenspeciaalzaak', 'ranzijn dier', 'petsplace', 'medpets', 'brekz', 'bitiba'] },
+  { id: 'opleiding', group: 'opleiding', name: 'Opleiding en cursussen', icon: '🎓', dir: 'out', kw: ['rijschool', 'rijles*', 'cbr', 'cursus*', 'opleiding*', 'studieboeken', 'hogeschool', 'universiteit', 'examen*', 'lesgeld', 'collegegeld', 'studiekosten', 'inholland'] },
+  { id: 'overboeking-persoon', group: 'personen', name: 'Betaald aan personen', icon: '👤', dir: 'out', kw: [] },
   { id: 'overig-uitgave', group: 'overig', name: 'Overige uitgaven', icon: '📦', dir: 'out', kw: [] },
   { id: UNCATEGORIZED, group: 'overig', name: 'Nog niet ingedeeld', icon: '❔', dir: 'out', kw: [] },
 
@@ -155,6 +162,7 @@ export const HINTS = [
   { category: 'supermarkt', words: ['boodschap*', 'bbq', 'barbecue', 'avondeten', 'gourmet*', 'supermarkt*', 'supermarket*', 'super', 'minimarkt', 'minimarket', 'toko', 'boodschappen', 'groceries', 'grocery', 'carrefour', 'intermarche', 'rewe', 'edeka', 'mercadona', 'conad', 'migros', 'tesco', 'sainsbury*', 'delhaize', 'colruyt', 'kaufland', 'penny', 'netto', 'billa'] },
   { category: 'fastfood', words: ['mac', 'mcd', 'macdonalds', 'kfc*', 'shoarmazaak', 'snack*', 'friet*', 'frites', 'patat*', 'burger*', 'chicken', 'kip', 'foodtruck', 'food truck', 'grillroom', 'doner*', 'kebab*', 'shoarma*', 'pita', 'falafel'] },
   { category: 'restaurant', words: ['restaurant*', 'resto', 'eetcafe', 'eethuis', 'bistro', 'brasserie', 'trattoria', 'osteria', 'ristorante', 'pizza*', 'sushi*', 'ramen', 'noodle*', 'wok', 'thai', 'indian', 'indiaas', 'mexican*', 'taco*', 'tapas', 'grill', 'steak*', 'diner', 'dinner', 'kitchen', 'keuken', 'food', 'foods', 'pannenkoek*', 'pancake*', 'poke', 'dim sum', 'asian', 'aziatisch', 'oriental', 'gastro*', 'eatery', 'eten'] },
+  { category: 'versspeciaal', words: ['brood*', 'bakery', 'boulangerie', 'padaria', 'panaderia', 'baeckerei', 'backerei'] },
   { category: 'koffie', words: ['ontbijt', 'brunch', 'koffietje', 'coffee*', 'koffie*', 'espresso*', 'cappuccino', 'lunch*', 'broodje*', 'sandwich*', 'bagel*', 'tea', 'thee', 'tearoom', 'ijs', 'ijssalon', 'gelato*', 'ice cream', 'patisserie', 'cafeteria', 'kantine', 'canteen', 'automaat', 'vending', 'selecta', 'smoothie*', 'juice'] },
   { category: 'kroeg', words: ['drank*', 'drankjes', 'biertjes', 'bier', 'wijn', 'bar', 'pub', 'cafe', 'kroeg', 'bier*', 'beer*', 'brouwerij', 'brewery', 'brewing', 'cocktail*', 'lounge', 'wijnbar', 'wine bar', 'paviljoen', 'strandpaviljoen', 'beachclub', 'beach club', 'nightclub', 'disco*', 'borrel*', 'taverne', 'herberg', 'proeverij'] },
   { category: 'brandstof', words: ['tank*', 'benzine', 'diesel', 'fuel', 'petrol', 'gas station', 'laadpaal', 'laadsessie', 'laden', 'charging', 'charge*', 'ev', 'tankpas'] },
@@ -176,7 +184,7 @@ export const HINTS = [
   { category: 'warenhuis', words: ['bazaar', 'bazar', 'huishoud*', 'woonwinkel', 'warenhuis', 'department store', 'euroshop', 'dollar*', 'kringloop*', 'tweedehands', 'thrift', 'markthal'] },
   { category: 'sportwinkel', words: ['sportwinkel', 'sportshop', 'sports', 'outdoor', 'running', 'bike', 'cycling'] },
   { category: 'boeken', words: ['books', 'book', 'boekwinkel', 'tijdschrift*', 'krant', 'magazine*', 'stripwinkel', 'comics'] },
-  { category: 'cadeaus', words: ['kerstcadeau*', 'verjaardagscadeau*', 'kraamcadeau*', 'surprise', 'bloemetje', 'flower*', 'florist', 'bloemist', 'bloemen*', 'cadeau*', 'kado*', 'gift*', 'speelgoed*', 'toys', 'toy'] },
+  { category: 'cadeaus', words: ['primera', 'kerstcadeau*', 'verjaardagscadeau*', 'kraamcadeau*', 'surprise', 'bloemetje', 'flower*', 'florist', 'bloemist', 'bloemen*', 'cadeau*', 'kado*', 'gift*', 'speelgoed*', 'toys', 'toy'] },
   { category: 'inrichting', words: ['meubel*', 'furniture', 'interieur*', 'wonen', 'woonwinkel', 'living', 'beddenwinkel', 'matras*', 'gordijn*', 'verlichting', 'lamp*', 'deco*'] },
   { category: 'klussen', words: ['tuin*', 'bouwmarkt', 'verf*', 'ijzerwaren', 'gereedschap', 'hout*', 'doe het zelf', 'diy', 'hardware'] },
   { category: 'auto', words: ['garage', 'autoservice', 'autobedrijf', 'banden*', 'bandenservice', 'apk', 'car', 'cars', 'auto*', 'wasstraat', 'carwash', 'car wash', 'pechhulp'] },
@@ -194,6 +202,6 @@ export const HINTS = [
   { category: 'huur', words: ['huur', 'rent', 'kamerhuur', 'servicekosten'], dir: 'out' },
   { category: 'cadeau-ontvangen', words: ['verjaardag*', 'jarig', 'cadeau*', 'kado*', 'sinterklaas', 'kerst*', 'gefeliciteerd', 'birthday'], dir: 'in' },
   { category: 'tikkie-ontvangen', words: ['tikkie*', 'betaalverzoek*', 'terug', 'terugbetaling', 'voorgeschoten', 'mijn deel', 'jouw deel', 'deel'], dir: 'in' },
-  { category: 'verkoop', words: ['verkoop', 'verkocht', 'koper', 'sold'], dir: 'in' },
+  { category: 'verkoop', words: ['bookmatch', 'verkoop', 'verkocht', 'koper', 'sold'], dir: 'in' },
   { category: 'salaris', words: ['salaris*', 'loon*', 'salary', 'payroll', 'wage*', 'uitbetaling uren', 'uren'], dir: 'in' },
 ];
