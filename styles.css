@@ -20,6 +20,9 @@
   --s-betaal: #2a78d6;
   --s-spaar: #13222e;
   --s-invest: #7f93a3;
+  --s-etf: #7f93a3;
+  --s-stock: #1baf7a;
+  --s-cash: #c3ccd3;
   --grid: #e3e7ea;
   --radius-l: 18px;
   --radius-m: 12px;
@@ -51,6 +54,9 @@
     --s-betaal: #3987e5;
     --s-spaar: #dfe6ec;
     --s-invest: #6b7f8f;
+    --s-etf: #7f93a3;
+    --s-stock: #2bbf8a;
+    --s-cash: #45535e;
     --grid: #22313c;
     --shadow-sheet: 0 -12px 40px rgba(0, 0, 0, 0.5);
   }
@@ -76,6 +82,9 @@
   --s-betaal: #3987e5;
   --s-spaar: #dfe6ec;
   --s-invest: #6b7f8f;
+  --s-etf: #7f93a3;
+  --s-stock: #2bbf8a;
+  --s-cash: #45535e;
   --grid: #22313c;
   --shadow-sheet: 0 -12px 40px rgba(0, 0, 0, 0.5);
 }
@@ -421,3 +430,22 @@ details.raw pre { white-space: pre-wrap; word-break: break-all; background: var(
 .trip-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
 .tbl-wrap { overflow-x: auto; }
 .report-link { background: var(--surface); border: 1px solid var(--line); }
+
+/* Totaaloverzicht */
+.tot-grid { display: grid; gap: 12px; }
+@media (min-width: 600px) { .tot-grid { grid-template-columns: 1fr 1fr; align-items: start; } }
+.pre-main { padding: 4px 16px 0; }
+.tot-card { padding: 14px; }
+.tot-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-size: 15px; }
+.tot-donut { width: 170px; height: 170px; margin: 6px auto 10px; }
+.tot-donut .donut-center b { font-size: 19px; }
+.seg-mini { margin-bottom: 4px; }
+.seg-mini button { padding: 6px 8px; font-size: 12.5px; }
+.tot-legend { list-style: none; margin: 0; padding: 0; font-size: 13.5px; }
+.tot-legend li { display: grid; grid-template-columns: 10px 1fr auto auto; gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line-soft); }
+.tot-legend li:first-child { border-top: none; }
+.tot-legend li > button { display: contents; font: inherit; color: inherit; text-align: left; background: none; border: none; cursor: pointer; }
+.tot-legend i { width: 10px; height: 10px; border-radius: 3px; display: block; }
+.tot-legend .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tot-legend .p { color: var(--muted); font-size: 12.5px; min-width: 32px; text-align: right; }
+.tot-legend .v { font-weight: 650; min-width: 64px; text-align: right; }

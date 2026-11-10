@@ -1,6 +1,6 @@
 // Service worker: maakt de app installeerbaar en offline bruikbaar.
 // Verhoog VERSION na elke update zodat telefoons de nieuwe bestanden ophalen.
-const VERSION = 'geldzicht-v1.7.0';
+const VERSION = 'geldzicht-v1.7.1';
 const SHELL = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'js/app.js', 'js/config.js', 'js/store.js', 'js/parser.js', 'js/logic.js', 'js/categories.js', 'js/demo.js', 'js/invest.js', 'js/insights.js',
