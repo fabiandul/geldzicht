@@ -6,7 +6,7 @@ import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -398,12 +398,13 @@ function renderOverview() {
   const guessed = inPeriod.filter((t) => t.by === 'gok' && !t.manual && !t.excluded).length;
   const net = splitEur(s.net);
   const moved = s.saved + s.invested;
+  const fromIncomeInvested = s.invested - s.shifted;
 
   // Lint: waar het binnengekomen geld naartoe ging
   const groups = Object.entries(s.byGroup).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const segs = groups.map(([g, v]) => ({ label: GROUP_BY_ID[g].name, value: v, color: groupColor(g), act: `data-act="group" data-v="${g}"` }));
   if (s.saved > 0) segs.push({ label: 'Sparen', value: s.saved, color: cssVar('--s-spaar') });
-  if (s.invested > 0) segs.push({ label: 'Beleggen', value: s.invested, color: cssVar('--s-invest') });
+  if (fromIncomeInvested > 0) segs.push({ label: 'Beleggen', value: fromIncomeInvested, color: cssVar('--s-invest') });
   const used = segs.reduce((a, b) => a + b.value, 0);
   const left = s.income - used;
   if (left > 0) segs.push({ label: 'Nog over', value: left, cls: 'left' });
@@ -414,6 +415,7 @@ function renderOverview() {
   const sub = s.income > 0
     ? `Je ontving <strong>${eur(s.income)}</strong> en gaf <strong>${eur(s.expense)}</strong> uit.${moved > 0 ? ` Daarnaast zette je <strong>${eur(moved)}</strong> opzij.` : ''}`
     : `Je gaf <strong>${eur(s.expense)}</strong> uit.`;
+  const shiftNote = s.shifted > 0 ? `<p class="help" style="margin:-8px 0 14px">Je verplaatste ook <strong>${eur(s.shifted)}</strong> van je spaarrekening naar beleggen. Dat is een verschuiving binnen je vermogen en telt hier niet mee.</p>` : '';
 
   const merchants = Object.values(s.byMerchant).filter((m) => m.total > 0).sort((a, b) => b.total - a.total).slice(0, 6);
   const maxM = merchants[0]?.total || 1;
@@ -425,6 +427,7 @@ function renderOverview() {
       <p class="hero-label">${s.net >= 0 ? 'Over' : 'Tekort'} in ${esc(periodNoun())}${isPartialMonth() ? ' tot nu toe' : ''}</p>
       <div class="hero-num num ${s.net < 0 ? 'neg' : ''}"><span>${net.main}</span><span class="cents">${net.cents}</span></div>
       <p class="hero-sub">${sub}</p>
+      ${shiftNote}
       <div class="ribbon" role="img" aria-label="${esc(ribbonTitle)}">
         ${segs.map((x) => `<span ${x.act || ''} class="${x.cls || ''}" style="flex-grow:${x.value};${x.color ? `background:${x.color}` : ''}" title="${esc(x.label)}: ${eur(x.value)}"></span>`).join('')}
       </div>
@@ -441,7 +444,7 @@ function renderOverview() {
       <div class="stats">
         <div class="stat"><div class="stat-label">Inkomsten</div><div class="stat-value num">${eur(s.income, true)}</div><div class="stat-delta">${ps ? deltaText(s.income, ps.income) : ''}</div></div>
         <div class="stat"><div class="stat-label">Uitgaven</div><div class="stat-value num">${eur(s.expense, true)}</div><div class="stat-delta">${ps ? deltaText(s.expense, ps.expense, true) : ''}</div></div>
-        <div class="stat"><div class="stat-label">Opzij gezet</div><div class="stat-value num">${eur(moved, true)}</div><div class="stat-delta">${s.income > 0 && moved > 0 ? `${Math.round((moved / s.income) * 100)}% van je inkomen` : ''}</div></div>
+        <div class="stat"><div class="stat-label">Opzij gezet</div><div class="stat-value num">${eur(moved, true)}</div><div class="stat-delta">${s.shifted > 0 ? `plus ${eur(s.shifted, true)} van sparen naar beleggen` : s.income > 0 && moved > 0 ? `${Math.round((moved / s.income) * 100)}% van je inkomen` : ''}</div></div>
       </div>
     </section>
 

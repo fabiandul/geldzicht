@@ -407,7 +407,7 @@ export function summarize(txs, settings, range) {
   const main = mainAccount(settings, txs);
   const rmap = reimbursementMap(txs);
   const res = {
-    income: 0, expense: 0, saved: 0, invested: 0,
+    income: 0, expense: 0, saved: 0, invested: 0, shifted: 0,
     byGroup: {}, byCat: {}, byMerchant: {}, byIncomeCat: {}, count: 0,
     fixed: 0, variable: 0, advanceOpen: 0, advanceOpenList: [],
   };
@@ -443,6 +443,8 @@ export function summarize(txs, settings, range) {
     res.byMerchant[mk].count += 1;
     if (GROUP_BY_ID[g]?.fixed) res.fixed += cost; else res.variable += cost;
   }
+  // Geld dat van de spaarrekening kwam en naar beleggingen ging is een verschuiving, geen nieuw opzij gezet geld
+  res.shifted = Math.max(0, Math.min(-res.saved, res.invested));
   res.net = res.income - res.expense;
   res.rate = res.income > 0 ? res.net / res.income : null;
   return res;
@@ -507,7 +509,7 @@ export function netWorthSeries(txs, settings, months) {
   const savingsStart = Number(settings.savingsStart || 0);
   const investStart = Number(settings.investStart || 0);
   const snaps = [...(settings.investSnapshots || [])].sort((a, b) => a.date.localeCompare(b.date));
-  const transfers = txs.filter((t) => t.account === main && !t.excluded && kindOf(t) === 'transfer');
+  const transfers = txs.filter((t) => !t.excluded && kindOf(t) === 'transfer' && (t.account === main || (t.category === 'beleggen' && spaarAccounts.includes(t.account))));
   const bux = settings.invest && settings.invest.events && settings.invest.events.length ? settings.invest.events : null;
   return months.map((mk) => {
     const end = lastDayOfMonth(mk);
