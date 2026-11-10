@@ -24,6 +24,7 @@ const num = (v) => {
   return isNaN(n) ? null : n;
 };
 const r2 = (n) => Math.round(n * 100) / 100;
+const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 export function isBuxCsv(text) {
   const first = (text.split(/\r?\n/)[0] || '').replace(/^﻿/, '');
@@ -211,12 +212,17 @@ export function investValueAt(events, snaps, upTo) {
   const snap = [...(snaps || [])].filter((s) => snapMoment(s) <= upTo).sort((a, b) => snapMoment(a).localeCompare(snapMoment(b))).pop();
   if (snap) {
     const after = netDepositsUpTo(events, upTo) - netDepositsUpTo(events, snapMoment(snap));
-    return { value: r2(Number(snap.value) + after), snap, estimated: after !== 0 };
+    // Posities die op dat moment open stonden maar zonder waarde zijn ingevuld: aankoopwaarde gebruiken
+    let missing = 0;
+    if (snap.positions && snap.positions.length) {
+      const have = new Set(snap.positions.map((x) => norm(x.name)));
+      for (const p of buildPortfolio(events, snapMoment(snap)).open) if (!have.has(norm(p.name))) missing += p.cost;
+    }
+    return { value: r2(Number(snap.value) + after + missing), snap, estimated: after !== 0 || missing > 0, missing: r2(missing) };
   }
   return { value: buildPortfolio(events, upTo).tot.bookValue, snap: null, estimated: true, book: true };
 }
 
-const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
 // Zoekt de opgegeven waarde van een positie in een momentopname.
 export function snapValueFor(snap, position, events) {

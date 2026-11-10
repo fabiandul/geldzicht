@@ -6,7 +6,7 @@ import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
 
-const VERSION = '1.5.1';
+const VERSION = '1.6.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -544,6 +544,7 @@ function txRow(t, rmap, note, opts = {}) {
   if (back > 0) tags.push(`<span class="tag ok">${back >= -t.amount - 0.001 ? 'terugbetaald' : eur(back) + ' terug'}</span>`);
   if (t.excluded) tags.push('<span class="tag">telt niet mee</span>');
   if (t.unmatched) tags.push('<span class="tag acc">niet gekoppeld</span>');
+  if (t.manualEntry) tags.push('<span class="tag">handmatig</span>');
   if (t.by === 'gok' && !t.manual) tags.push('<span class="tag">geschat</span>');
   const role = L.accountRole(S.settings, t.account, S.txs);
   if (role === 'spaar') tags.push('<span class="tag">spaarrekening</span>');
@@ -630,6 +631,7 @@ function renderTransactions() {
         <option value="all" ${f.scope === 'all' ? 'selected' : ''}>Alle perioden</option>
       </select>
     </div>
+    ${f.kind === 'guess' && list.length ? `<button class="btn block" data-act="approve-all" style="margin:10px 0 2px">Alle ${list.length} goedkeuren</button>` : ''}
     <p class="help" style="margin:8px 2px 0">${list.length} transacties${totalOut > 0 ? `, uitgaven ${eur(totalOut)}` : totalOut < 0 ? `, per saldo ${eur(-totalOut)} terugbetaald` : ''}${totalIn ? `, inkomsten ${eur(totalIn)}` : ''}</p>
     ${list.length ? html : '<div class="empty"><h3>Niets gevonden</h3><p>Pas de zoekterm of filters aan.</p></div>'}
     ${list.length > f.limit ? `<button class="btn ghost more-btn" data-act="tx-more">Meer laden (${list.length - f.limit})</button>` : ''}
@@ -679,6 +681,7 @@ function openTx(id) {
       ${back > 0 ? `<div class="callout">${eur(back)} terugbetaald${reimbursedBy.length ? ` door ${esc(reimbursedBy[0].name)} op ${fmtDate(reimbursedBy[0].date, false)}` : ''}. ${back >= -t.amount - 0.001 ? 'Telt daarom niet mee als uitgave.' : `Je eigen deel is ${eur(-t.amount - back)}.`}</div>` : ''}
       ${t.amount > 0 && k !== 'transfer' && k !== 'terugbetaling' ? `<button class="btn quiet block" data-act="link" data-v="${t.id}" style="margin:8px 0">Koppel als terugbetaling van uitgaven</button>` : ''}
       <label class="toggle-row"><span class="txt">Niet meetellen<small>Verbergt deze transactie in alle overzichten en grafieken.</small></span><span class="switch"><input type="checkbox" data-act="toggle-excluded" data-v="${t.id}" ${t.excluded ? 'checked' : ''}><span></span></span></label>
+      ${t.manualEntry ? `<div class="callout">Zelf toegevoegd. Zodra je een bankbestand importeert dat deze datum bevat, wordt deze transactie automatisch vervangen door de echte.<div class="btn-row" style="margin-top:10px"><button class="btn danger small" data-act="del-manual" data-v="${t.id}" type="button">Verwijderen</button></div></div>` : ''}
     </div>
 
     <div class="field"><label for="txNote">Notitie</label><input id="txNote" class="input" data-v="${t.id}" value="${esc(t.note || '')}" placeholder="Bijvoorbeeld: verjaardag Tim"></div>
@@ -1190,7 +1193,7 @@ function renderInvest() {
       <p class="hero-sub">${sgn(gain)} rendement op ${eur(tot.netDeposits)} ingelegd${tot.netDeposits ? ` (${(gain / tot.netDeposits * 100).toLocaleString('nl-NL', { maximumFractionDigits: 1 })}%)` : ''}</p>
       <p class="help" style="margin-top:-8px">${val.book ? 'Nog geen actuele waardes ingevuld: dit is wat je ervoor betaald hebt plus je cash.' : val.estimated ? `Op basis van je waardes van ${snapDate}, plus wat je daarna hebt gestort.` : `Volgens je waardes van ${snapDate}.`}</p>
     </section>
-    ${tradedAfter.length || val.book ? `<button class="banner" data-act="nw-update"><div><b>${val.book ? 'Vul de actuele waardes in' : `${tradedAfter.length} ${tradedAfter.length === 1 ? 'transactie' : 'transacties'} na ${snapDate}`}</b><span>Neem de waarde per positie over uit de BUX-app, dan klopt je rendement per positie. Je posities staan al klaar.</span></div><span class="go">Bijwerken</span></button>` : ''}
+    ${tradedAfter.length || val.book || rows.some((r) => r.value == null) ? `<button class="banner" data-act="nw-update"><div><b>${val.book ? 'Vul de actuele waardes in' : tradedAfter.length ? `${tradedAfter.length} ${tradedAfter.length === 1 ? 'transactie' : 'transacties'} na ${snapDate}` : `${rows.filter((r) => r.value == null).length} posities zonder actuele waarde`}</b><span>Neem de waarde per positie over uit de BUX-app, dan klopt je rendement per positie. Je posities staan al klaar.</span></div><span class="go">Bijwerken</span></button>` : ''}
     <section>
       <div class="stats">
         <div class="stat"><div class="stat-label">Ingelegd</div><div class="stat-value num">${eur(tot.netDeposits, true)}</div><div class="stat-delta">${events.filter((e) => e.kind === 'deposit').length} stortingen</div></div>
@@ -1454,6 +1457,7 @@ function openNwUpdate() {
       <div id="posRows">${start.map(posRowHtml).join('')}</div>
       <button class="btn quiet small" id="posAdd" type="button" style="margin:4px 0 14px">Positie toevoegen</button>
       <div class="sumline" id="posTotal"></div>
+      <p class="help" id="posFill" style="margin-top:-6px"></p>
       <div class="field"><label for="snapGain">Totaal rendement volgens BUX (optioneel)</label><input id="snapGain" class="input" inputmode="decimal" placeholder="bijv. 660,60">
         <p class="help">Het groene bedrag bovenaan in BUX. Vul je dit in, dan gebruikt de app dat in plaats van de berekening uit de percentages. Die kan een paar euro afwijken.</p></div>
       <details class="raw"><summary>Liever alleen het totaal invullen</summary>
@@ -1467,7 +1471,15 @@ function openNwUpdate() {
         const ps = readPositions(sheet);
         const total = ps.reduce((a, p) => a + p.value, 0);
         const gain = portfolioGain(ps);
-        sheet.querySelector('#posTotal').innerHTML = ps.length ? `<span>Totaal ${eur(total)}</span><span>${gain != null ? `${sgn(gain)} rendement` : ''}</span>` : '';
+        let fill = 0;
+        let fillN = 0;
+        if (hasBux()) {
+          const names = new Set(ps.map((x) => L.normalize(x.name)));
+          for (const r of invState().rows) if (!names.has(L.normalize(r.name))) { fill += r.cost; fillN++; }
+        }
+        sheet.querySelector('#posTotal').innerHTML = ps.length ? `<span>Totaal ${eur(total + fill)}</span><span>${gain != null && !fillN ? `${sgn(gain)} rendement` : ''}</span>` : '';
+        const note = sheet.querySelector('#posFill');
+        if (note) note.textContent = fillN ? `${fillN} ${fillN === 1 ? 'positie' : 'posities'} zonder waarde tellen mee tegen de aankoopwaarde (${eur(fill)}).` : '';
       };
       sheet.addEventListener('input', upd);
       sheet.addEventListener('change', upd);
@@ -1510,6 +1522,7 @@ function renderSettings() {
       <h2>Gegevens</h2>
       <div class="set-group">
         <button class="set-row" data-act="import"><span class="ico">⤓</span><span class="txt">Bestand importeren<small>${lastImport ? `Laatst: ${fmtDate(lastImport.date)}, ${lastImport.added} nieuw. ` : ''}ABN AMRO TXT of XLS, of de BUX-export (CSV)</small></span><span class="chev">›</span></button>
+        <button class="set-row" data-act="add-tx"><span class="ico">✍️</span><span class="txt">Transactie toevoegen<small>Iets dat nog niet in je bankbestand staat, bijvoorbeeld een overboeking van vandaag</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="quick"><span class="ico">🗂️</span><span class="txt">Snel indelen<small>Transacties zonder categorie één voor één indelen</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="howto"><span class="ico">❓</span><span class="txt">Zo download je je transacties<small>Stappen voor ABN AMRO</small></span><span class="chev">›</span></button>
       </div>
@@ -1820,6 +1833,11 @@ async function handleFile(file) {
 function doImport(fresh, fileName) {
   const now = new Date().toISOString();
   fresh.forEach((t) => { t.imported = now; });
+  // Zelf toegevoegde transacties vervangen door de echte zodra het bankbestand die periode dekt
+  const maxDate = {};
+  for (const t of fresh) if (!maxDate[t.account] || t.date > maxDate[t.account]) maxDate[t.account] = t.date;
+  const replaced = S.txs.filter((t) => t.manualEntry && maxDate[t.account] && t.date <= maxDate[t.account]).map((t) => t.id);
+  if (replaced.length) { S.txs = S.txs.filter((t) => !replaced.includes(t.id)); markIds(replaced); }
   S.txs.push(...fresh);
   // Rekeningen registreren; de meest gebruikte wordt de betaalrekening
   const acc = { ...(S.settings.accounts || {}) };
@@ -1848,6 +1866,49 @@ function loadDemo() {
   S.settings = { ...DEFAULT_SETTINGS, ...S.settings, payers: DEMO_SETTINGS.payers, accounts: { '123456789': { role: 'betaal', label: 'Betaalrekening (voorbeeld)' }, '987654321': { role: 'spaar', label: 'Spaarrekening (voorbeeld)' } }, investStart: 1000 };
   doImport(res.txs, 'voorbeeldgegevens');
   toast('Voorbeeld geladen. Wis het via Meer voor je eigen import.');
+}
+
+/* ---------- Zelf een transactie toevoegen ---------- */
+
+function openAddTx() {
+  const accs = [...new Set(S.txs.map((t) => t.account))];
+  if (!accs.length) { toast('Importeer eerst een bankbestand'); return; }
+  const label = (a) => `${S.settings.accounts?.[a]?.label || (L.accountRole(S.settings, a, S.txs) === 'betaal' ? 'Betaalrekening' : 'Spaarrekening')} (eindigt op ${a.slice(-3)})`;
+  openSheet({
+    title: 'Transactie toevoegen',
+    body: `
+      <p class="help">Voor iets dat nog niet in je bankbestand staat. Zodra je een bankbestand importeert dat deze datum bevat, wordt dit vanzelf vervangen door de echte transactie, zodat niets dubbel telt.</p>
+      <div class="field"><label for="mAcc">Rekening</label><select id="mAcc">${accs.map((a) => `<option value="${esc(a)}">${esc(label(a))}</option>`).join('')}</select></div>
+      <div class="toolbar">
+        <div class="field" style="flex:1;margin:0"><label for="mDir">Soort</label><select id="mDir"><option value="af">Af</option><option value="bij">Bij</option></select></div>
+        <div class="field" style="flex:1;margin:0"><label for="mAmt">Bedrag</label><input id="mAmt" class="input" inputmode="decimal" placeholder="0,00"></div>
+      </div>
+      <div class="field"><label for="mDate">Datum</label><input id="mDate" class="input" type="date" value="${todayIso()}"></div>
+      <div class="field"><label for="mName">Omschrijving</label><input id="mName" class="input" placeholder="Bijvoorbeeld: naar BUX"></div>
+      <div class="field"><label for="mCat">Categorie</label><select id="mCat">${catOptions('', { allowGroups: false, emptyLabel: 'Kies categorie' })}</select></div>`,
+    foot: '<button class="btn block" id="mSave">Toevoegen</button>',
+    onMount: (sheet) => {
+      sheet.querySelector('#mSave').onclick = () => {
+        const account = sheet.querySelector('#mAcc').value;
+        const n = parseAmount(sheet.querySelector('#mAmt').value);
+        const date = sheet.querySelector('#mDate').value;
+        const name = sheet.querySelector('#mName').value.trim() || 'Handmatige transactie';
+        const category = sheet.querySelector('#mCat').value.replace(/^c:/, '');
+        if (isNaN(n) || !n || !date || !category) { toast('Vul bedrag, datum en categorie in'); return; }
+        const amount = Math.round((sheet.querySelector('#mDir').value === 'af' ? -Math.abs(n) : Math.abs(n)) * 100) / 100;
+        const tx = { id: 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), account, date, amount, type: 'Handmatig', name, desc: '', iban: '', time: '', card: false, raw: 'Zelf toegevoegd in Geldzicht', source: 'handmatig', manualEntry: true, manual: true, by: 'handmatig', category, balanceBefore: null, balanceAfter: null };
+        // Saldo bijwerken zodat Vermogen klopt
+        const series = (L.closingBalances(S.txs)[account] || []).filter((e) => e.date <= date);
+        if (series.length) { const before = series[series.length - 1].balance; tx.balanceBefore = before; tx.balanceAfter = Math.round((before + amount) * 100) / 100; }
+        S.txs.push(tx);
+        markTx(tx);
+        recompute();
+        closeSheet();
+        render();
+        toast('Transactie toegevoegd');
+      };
+    },
+  });
 }
 
 /* ---------- Export ---------- */
@@ -1952,6 +2013,23 @@ document.addEventListener('click', (e) => {
     case 'merchant': S.view = 'transacties'; S.tx = { ...S.tx, q: v, cat: '', kind: 'all', scope: 'period', limit: 150 }; render(); window.scrollTo(0, 0); break;
     case 'tx-kind': S.tx.kind = v; S.tx.limit = 150; render(); break;
     case 'tx-more': S.tx.limit += 300; render(); break;
+    case 'approve-all': {
+      const list = filteredTxs().filter((t) => t.by === 'gok' && !t.manual);
+      for (const t of list) { t.manual = true; t.by = 'handmatig'; }
+      markTx(...list);
+      recompute();
+      S.tx.kind = 'all';
+      render();
+      toast(`${list.length} transacties goedgekeurd`);
+      break;
+    }
+    case 'add-tx': openAddTx(); break;
+    case 'del-manual': {
+      if (el.dataset.armed !== '1') { el.dataset.armed = '1'; el.textContent = 'Zeker weten? Tik nog eens'; break; }
+      const i = S.txs.findIndex((x) => x.id === v);
+      if (i >= 0) { S.txs.splice(i, 1); markIds([v]); recompute(); closeSheet(); render(); toast('Transactie verwijderd'); }
+      break;
+    }
     case 'link': openLinkPicker(v); break;
     case 'unlink': {
       const t = S.txs.find((x) => x.id === v);
