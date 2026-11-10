@@ -909,7 +909,7 @@ function recRow(r, opts = {}) {
   const pos = r.amount > 0;
   return `<div class="tx pos-row">
     <span class="tx-ico" style="background:color-mix(in srgb, ${g.color} 16%, transparent)">${cat.icon}</span>
-    <span class="tx-main"><div class="tx-name">${esc(r.name)}</div><div class="tx-sub">${esc(opts.sub || `${cat.name}, rond de ${r.day}e`)}${r.periodic ? '<span class="tag">periodiek</span>' : ''}${opts.done === true ? '<span class="tag ok">al betaald</span>' : opts.done === false ? '<span class="tag acc">verwacht</span>' : ''}</div></span>
+    <span class="tx-main"><div class="tx-name">${esc(r.name)}</div><div class="tx-sub">${esc(opts.sub || `${cat.name}, rond de ${r.day}e`)}${r.periodic ? '<span class="tag">periodiek</span>' : ''}${opts.done === true ? '<span class="tag ok">al betaald</span>' : opts.late ? '<span class="tag acc">nog niet gezien</span>' : opts.done === false ? '<span class="tag">verwacht</span>' : ''}</div></span>
     <span class="tx-amt num ${pos ? 'in' : ''}"><span class="amt">${pos ? '+' : '−'}${eur(Math.abs(r.amount))}</span>${opts.right ? `<small>${esc(opts.right)}</small>` : ''}</span>
   </div>`;
 }
@@ -925,7 +925,7 @@ function overviewExpected(mk) {
   const show = (open.length ? open : items).slice(0, 4);
   return `<section>
     <h2>${open.length ? 'Nog verwacht deze maand' : 'Vaste posten deze maand'} <span class="aside">${open.length ? [outOpen ? `${eur(outOpen, true)} eruit` : '', inOpen ? `${eur(inOpen, true)} erin` : ''].filter(Boolean).join(', ') : 'alles binnen'}</span></h2>
-    <div class="tx-list">${show.map((r) => recRow(r, { done: r.done, right: fmtDate(r.date, false) })).join('')}</div>
+    <div class="tx-list">${show.map((r) => recRow(r, { done: r.done, late: r.late, right: fmtDate(r.date, false) })).join('')}</div>
     <button class="link" style="margin-top:8px" data-act="go-analyse" data-v="vast">Alle vaste lasten (${rec.active.length})</button>
   </section>`;
 }
@@ -992,7 +992,7 @@ function renderTrips() {
       const sum = cats.reduce((a, [, v]) => a + v, 0) || 1;
       return `<section><button class="trip" data-act="trip" data-v="${esc(tr.id)}">
         <div class="trip-head"><b>${esc(tr.name)}</b><span class="num">${eur(tr.total)}</span></div>
-        <div class="trip-sub">${fmtDate(tr.from, true)}${tr.to !== tr.from ? ` tot ${fmtDate(tr.to, true)}` : ''}${tr.days > 1 ? `, ${tr.days} dagen` : ''}${tr.perDay ? `, ${eur(tr.perDay)} per dag` : ''}${tr.bookedFrom < tr.from ? `. Geboekt vanaf ${fmtDate(tr.bookedFrom, false)}` : ''}</div>
+        <div class="trip-sub">${tr.places.length ? `${esc(tr.places.join(', '))}. ` : ''}${fmtDate(tr.from, true)}${tr.to !== tr.from ? ` tot ${fmtDate(tr.to, true)}` : ''}${tr.days > 1 ? `, ${tr.days} dagen` : ''}${tr.perDay ? `, ${eur(tr.perDay)} per dag` : ''}${tr.bookedFrom < tr.from ? `. Geboekt vanaf ${fmtDate(tr.bookedFrom, false)}` : ''}</div>
         <div class="ribbon" style="height:10px;margin-top:10px">${cats.map(([c, v], i) => `<span style="flex-grow:${v};background:${TRIP_COLORS[i % TRIP_COLORS.length]}" title="${esc(catInfo(c).name)}"></span>`).join('')}</div>
         <div class="ribbon-legend">${cats.slice(0, 5).map(([c, v], i) => `<span><i style="background:${TRIP_COLORS[i % TRIP_COLORS.length]}"></i>${esc(catInfo(c).name)} ${eur(v, true)}</span>`).join('')}</div>
       </button></section>`;
@@ -1013,7 +1013,7 @@ function openTrip(id) {
         ${tr.days > 1 ? `<dt>Duur</dt><dd>${tr.days} dagen</dd>` : ''}
         ${tr.perDay ? `<dt>Per dag</dt><dd class="num">${eur(tr.perDay)}</dd>` : ''}
         ${tr.countries.length ? `<dt>Landen</dt><dd>${esc(tr.countries.join(', '))}</dd>` : ''}
-        ${tr.city ? `<dt>Meeste uitgaven in</dt><dd>${esc(tr.city)}</dd>` : ''}
+        ${tr.places.length ? `<dt>Plaatsen</dt><dd>${esc(tr.places.join(', '))}</dd>` : ''}
       </dl>
       <div class="tx-list">${items.map((t) => txRow(t, rmap)).join('')}</div>`,
   });

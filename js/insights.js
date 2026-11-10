@@ -125,7 +125,7 @@ export function expectedInMonth(rec, txs, mk) {
       continue;
     }
     const paid = r.last.slice(0, 7) === mk;
-    items.push({ ...r, date: paid ? r.last : d, done: paid });
+    items.push({ ...r, date: paid ? r.last : d, done: paid, late: !paid && d < rec.ref });
   }
   return items.sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -161,20 +161,23 @@ const COUNTRY = {
   CAN: 'Canada', AUS: 'Australië', VNM: 'Vietnam', MYS: 'Maleisië', SGP: 'Singapore', ARE: 'Verenigde Arabische Emiraten', ZAF: 'Zuid-Afrika',
   BRA: 'Brazilië', ARG: 'Argentinië', CUW: 'Curaçao', ABW: 'Aruba', EST: 'Estland', LVA: 'Letland', LTU: 'Litouwen', MNE: 'Montenegro', ALB: 'Albanië',
 };
-const PLACES = [
-  [/komodo|labuan|bajo|lombok|rinjani|gili|bali|ubud|jakarta|yogyakarta|flores|indonesi/i, 'Indonesië'],
-  [/porto|lisbo|lissabon|algarve|madeira|douro/i, 'Portugal'],
-  [/barcelona|madrid|valencia|malaga|mallorca|ibiza|tenerife|canaria|sevilla/i, 'Spanje'],
-  [/parijs|paris|rouen|normandi|nice|lyon|marseille/i, 'Frankrijk'],
-  [/londen|london|manchester|edinburgh/i, 'Verenigd Koninkrijk'],
-  [/rome|roma|milaan|milano|florence|firenze|venetie|venezia|napels/i, 'Italië'],
-  [/berlijn|berlin|munchen|keulen|koln|hamburg/i, 'Duitsland'],
-  [/tokyo|kyoto|osaka|japan/i, 'Japan'],
-  [/bangkok|phuket|chiang|thailand/i, 'Thailand'],
-  [/new york|nyc|los angeles|miami/i, 'Verenigde Staten'],
+const PLACE_WORDS = [
+  ['komodo|labuan bajo|lombok|rinjani|gili|bali|ubud|jakarta|yogyakarta|flores|indonesie|indonesia|sumatra|java', 'Indonesië'],
+  ['porto|lisboa|lissabon|lisbon|algarve|madeira|douro', 'Portugal'],
+  ['barcelona|madrid|valencia|malaga|mallorca|ibiza|tenerife|gran canaria|sevilla', 'Spanje'],
+  ['parijs|paris|rouen|normandie|normandy|lyon|marseille|caen', 'Frankrijk'],
+  ['londen|london|manchester|edinburgh', 'Verenigd Koninkrijk'],
+  ['rome|roma|milaan|milano|florence|firenze|venetie|venezia|napels', 'Italië'],
+  ['berlijn|berlin|munchen|keulen|koln|hamburg', 'Duitsland'],
+  ['tokyo|kyoto|osaka|japan', 'Japan'],
+  ['bangkok|phuket|chiang mai|thailand', 'Thailand'],
+  ['new york|los angeles|miami', 'Verenigde Staten'],
 ];
+const PLACES = PLACE_WORDS.map(([w, c]) => [new RegExp(`\\b(${w})\\b`, 'i'), c]);
 const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni', 'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
 const BOOKING = new Set(['vliegen', 'verblijf', 'vakantie']);
+// Landen waar je vaak alleen doorheen rijdt: die beginnen geen nieuwe reis
+const TRANSIT = new Set(['BEL', 'BE', 'DEU', 'DE', 'LUX', 'LU']);
 
 function foreign(t) {
   if (!t.card) return null;
@@ -184,60 +187,115 @@ function foreign(t) {
 }
 const isRevolut = (t) => t.amount < 0 && (t.iban || '').toUpperCase().slice(4, 8) === 'REVO';
 const titleCase = (s) => s.toLowerCase().replace(/(^|[\s-])([a-zà-ÿ])/g, (m, a, b) => a + b.toUpperCase());
+function placeOf(t) {
+  const text = `${t.name || ''} ${t.desc || ''}`.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  for (const [re, c] of PLACES) { const m = text.match(re); if (m) return { country: c, place: titleCase(m[1]) }; }
+  return null;
+}
+const between = (d, a, b) => d >= a && d <= b;
+const shift = (d, n) => new Date((dnum(d) + n) * DAY).toISOString().slice(0, 10);
 
+// Reizen automatisch samenstellen:
+// 1. pinbetalingen in het buitenland vormen de kern (nieuw land na een paar dagen stilte = nieuwe reis)
+// 2. geld naar Revolut hoort als geheel bij de reis waar het meeste geld rond is overgemaakt
+// 3. vluchten, verblijf en vakantie-Tikkies horen bij de reis waarin ze vallen, bij dezelfde persoon, of bij de eerstvolgende reis
 export function detectTrips(txs, settings) {
   const main = L.mainAccount(settings, txs);
-  const cand = [];
+  const core = [];
+  const revs = [];
+  const books = [];
   for (const t of txs) {
     if (t.account !== main || t.excluded) continue;
     const ctry = foreign(t);
-    const abroad = !!ctry || t.category === 'reis-uitgaven' || isRevolut(t);
-    const booking = BOOKING.has(t.category);
-    if (!abroad && !booking) continue;
-    cand.push({ t, abroad, ctry });
+    if (isRevolut(t)) revs.push(t);
+    else if (ctry || t.category === 'reis-uitgaven') core.push({ t, ctry });
+    else if (BOOKING.has(t.category)) books.push(t);
   }
-  cand.sort((a, b) => a.t.date.localeCompare(b.t.date));
-  const clusters = [];
-  for (const c of cand) {
-    const cur = clusters[clusters.length - 1];
-    if (cur && dnum(c.t.date) - dnum(cur.end) <= 21) { cur.items.push(c); cur.end = c.t.date; }
-    else clusters.push({ items: [c], start: c.t.date, end: c.t.date });
+  const byDate = (a, b) => a.date.localeCompare(b.date);
+  core.sort((a, b) => byDate(a.t, b.t));
+  revs.sort(byDate);
+  books.sort(byDate);
+
+  const trips = [];
+  for (const c of core) {
+    const cur = trips[trips.length - 1];
+    const gap = cur ? dnum(c.t.date) - dnum(cur.to) : Infinity;
+    const real = c.ctry && !TRANSIT.has(c.ctry);
+    const newCountry = cur && real && cur.ctrys.size && !cur.ctrys.has(c.ctry);
+    if (!cur || gap > 21 || (newCountry && gap >= 3)) trips.push({ items: [c.t], from: c.t.date, to: c.t.date, ctrys: new Set(real ? [c.ctry] : []) });
+    else { cur.items.push(c.t); cur.to = c.t.date; if (real) cur.ctrys.add(c.ctry); }
   }
-  // Boekingen zonder uitgaven ter plekke horen bij de eerstvolgende reis (binnen 150 dagen)
-  const merged = [];
-  let pending = [];
-  for (const cl of clusters) {
-    const hasAbroad = cl.items.some((c) => c.abroad);
-    if (!hasAbroad) {
-      const next = clusters.find((x) => x.start > cl.end && x.items.some((c) => c.abroad));
-      if (next && dnum(next.start) - dnum(cl.end) <= 150) { pending.push(...cl.items); continue; }
+
+  // Revolut: groepjes opwaarderingen, gekoppeld aan de reis het dichtst bij het zwaartepunt
+  const revGroups = [];
+  for (const t of revs) {
+    const g = revGroups[revGroups.length - 1];
+    if (g && dnum(t.date) - dnum(g[g.length - 1].date) <= 45) g.push(t); else revGroups.push([t]);
+  }
+  for (const g of revGroups) {
+    const total = g.reduce((a, t) => a - t.amount, 0);
+    let acc = 0;
+    const mid = g.find((t) => (acc += -t.amount) >= total / 2).date;
+    let best = null;
+    let bestD = Infinity;
+    for (const tr of trips) {
+      const d = mid < tr.from ? dnum(tr.from) - dnum(mid) : mid > tr.to ? dnum(mid) - dnum(tr.to) : 0;
+      if (d < bestD) { bestD = d; best = tr; }
     }
-    merged.push({ items: [...pending, ...cl.items] });
-    pending = [];
+    if (best && bestD <= 30) {
+      best.items.push(...g);
+      for (const t of g) if (t.date > best.to) best.to = t.date;
+    } else trips.push({ items: [...g], from: g[0].date, to: g[g.length - 1].date, ctrys: new Set() });
   }
-  if (pending.length) merged.push({ items: pending });
+  trips.sort((a, b) => a.from.localeCompare(b.from));
+
+  // Boekingen
+  const ibanOf = (t) => (t.iban || '').toUpperCase();
+  const left = [];
+  const rest = [];
+  for (const b of books) {
+    const tr = trips.find((x) => between(b.date, shift(x.from, -3), shift(x.to, 14)));
+    if (tr) tr.items.push(b); else rest.push(b);
+  }
+  for (const b of rest) {
+    const pl = placeOf(b);
+    const ahead = trips.filter((x) => x.from > b.date && dnum(x.from) - dnum(b.date) <= 150);
+    const tr = (pl && ahead.find((x) => x.items.some((t) => placeOf(t)?.country === pl.country || COUNTRY[foreign(t)] === pl.country)))
+      || (ibanOf(b) && ahead.find((x) => x.items.some((t) => ibanOf(t) === ibanOf(b))))
+      || ahead[0];
+    if (tr) tr.items.push(b); else left.push(b);
+  }
+  // Losse boekingen zonder reis in de buurt: eigen reis
+  for (const b of left) {
+    const cur = trips.find((x) => x.bookingOnly && dnum(b.date) - dnum(x.to) <= 21 && b.date >= x.from);
+    if (cur) { cur.items.push(b); cur.to = b.date; } else trips.push({ items: [b], from: b.date, to: b.date, ctrys: new Set(), bookingOnly: true });
+  }
+
   const rmapAll = L.reimbursementMap(txs);
-  const trips = merged.map((cl) => {
-    const items = cl.items.map((c) => c.t);
-    const abroadItems = cl.items.filter((c) => c.abroad).map((c) => c.t);
-    const codes = {};
+  const out = trips.map((tr) => {
+    const items = [...new Set(tr.items)].sort(byDate);
+    const votes = {};
     const cities = {};
-    for (const c of cl.items) {
-      if (!c.ctry) continue;
-      const name = COUNTRY[c.ctry] || c.ctry;
-      codes[name] = (codes[name] || 0) + 1;
-      const city = (c.t.desc || '').split(',')[0].trim();
-      if (city && city.length > 2) cities[titleCase(city)] = (cities[titleCase(city)] || 0) + 1;
+    const keyPlaces = {};
+    for (const t of items) {
+      const amt = Math.abs(t.amount);
+      const c = foreign(t);
+      if (c) {
+        const name = COUNTRY[c] || c;
+        votes[name] = (votes[name] || 0) + amt * (TRANSIT.has(c) ? 0.3 : 1) + 0.01;
+      }
+      const pl = placeOf(t);
+      if (pl) { votes[pl.country] = (votes[pl.country] || 0) + amt + 0.01; keyPlaces[pl.place] = pl.country; }
     }
-    let country = Object.entries(codes).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    if (!country) {
-      const text = items.map((t) => `${L.displayName(t)} ${t.desc || ''}`).join(' ');
-      country = (PLACES.find(([re]) => re.test(text)) || [])[1] || null;
+    const country = Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    for (const t of items) {
+      const c = foreign(t);
+      if (!c || (COUNTRY[c] || c) !== country) continue;
+      const city = titleCase((t.desc || '').split(',')[0].trim());
+      if (city.length > 2 && !/^\d/.test(city)) cities[city] = (cities[city] || 0) + Math.abs(t.amount);
     }
-    const city = Object.entries(cities).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    const span = abroadItems.length ? abroadItems : items;
-    const from = span[0].date;
-    const to = span[span.length - 1].date;
+    const places = [...Object.entries(keyPlaces).filter(([, c]) => c === country).map(([p]) => p), ...Object.entries(cities).sort((a, b) => b[1] - a[1]).map(([c]) => c)]
+      .filter((p, i, a) => a.findIndex((x) => x.toLowerCase() === p.toLowerCase()) === i).slice(0, 4);
     const byCat = {};
     let total = 0;
     for (const t of items) {
@@ -245,23 +303,22 @@ export function detectTrips(txs, settings) {
       total += cost;
       byCat[t.category] = (byCat[t.category] || 0) + cost;
     }
-    const [y, m] = from.split('-').map(Number);
-    const label = country ? `${country}${city && Object.keys(codes).length ? ` (${city})` : ''}` : 'Reis';
-    const days = dnum(to) - dnum(from) + 1;
+    const [y, m] = tr.from.split('-').map(Number);
+    const days = dnum(tr.to) - dnum(tr.from) + 1;
     return {
       id: items[0].id,
-      name: `${label}, ${MONTHS[m - 1]} ${y}`,
-      country, city, from, to, days,
+      name: `${country || 'Reis'}, ${MONTHS[m - 1]} ${y}`,
+      country, city: places[0] || null, places, from: tr.from, to: tr.to, days,
       bookedFrom: items[0].date,
       total: r2(total),
       perDay: days > 1 ? r2(total / days) : null,
       byCat,
       count: items.length,
-      countries: Object.keys(codes),
+      countries: Object.keys(votes).sort((a, b) => votes[b] - votes[a]),
       ids: items.map((t) => t.id),
     };
-  }).filter((t) => t.total >= 15 || t.countries.length);
-  return trips.sort((a, b) => b.from.localeCompare(a.from));
+  }).filter((t) => t.total >= 15);
+  return out.sort((a, b) => b.from.localeCompare(a.from));
 }
 
 /* ---------- Maandafsluiting ---------- */
