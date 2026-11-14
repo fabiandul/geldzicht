@@ -95,8 +95,27 @@ async function main() {
   const now = new Date();
   const today = isoDay(now);
 
-  // 1. Toestemmingslink maken
-  if (bank.request === 'auth' || MODE === 'auth') {
+  // 1. Code inwisselen voor een sessie
+  if (bank.code) {
+    try {
+      const s = await api('POST', '/sessions', { code: bank.code });
+      const accounts = (s.accounts || []).map((a) => ({ uid: a.uid, iban: a.account_id?.iban || '' }));
+      await bankRef.set({
+        code: null, codeState: null, authUrl: null, state: null,
+        session: s.session_id, accounts, validUntil: s.access?.valid_until || null,
+        linkedAt: now.toISOString(), error: null, request: 'sync', expired: false,
+      }, { merge: true });
+      log('sessie gemaakt,', accounts.length, 'rekening(en)');
+      bank.session = s.session_id; bank.accounts = accounts; bank.request = 'sync';
+    } catch (e) {
+      await bankRef.set({ code: null, codeState: null, error: `Toestemming verwerken mislukt (${e.status || ''})`, errorAt: now.toISOString() }, { merge: true });
+      log('sessie maken mislukt:', e.message, e.detail);
+      return;
+    }
+  }
+
+  // 2. Toestemmingslink maken
+  if (!bank.code && (bank.request === 'auth' || MODE === 'auth')) {
     const state = crypto.randomBytes(16).toString('hex');
     let link = null;
     for (const days of [180, 90]) {
@@ -113,30 +132,6 @@ async function main() {
     await bankRef.set({ request: null, authUrl: link.url, state, authAt: now.toISOString(), error: null }, { merge: true });
     log('toestemmingslink klaargezet');
     return;
-  }
-
-  // 2. Code inwisselen voor een sessie
-  if (bank.code) {
-    if (bank.codeState && bank.state && bank.codeState !== bank.state) {
-      await bankRef.set({ code: null, codeState: null, error: 'Toestemming hoorde niet bij deze aanvraag, probeer opnieuw' }, { merge: true });
-      log('state klopte niet');
-      return;
-    }
-    try {
-      const s = await api('POST', '/sessions', { code: bank.code });
-      const accounts = (s.accounts || []).map((a) => ({ uid: a.uid, iban: a.account_id?.iban || '' }));
-      await bankRef.set({
-        code: null, codeState: null, authUrl: null, state: null,
-        session: s.session_id, accounts, validUntil: s.access?.valid_until || null,
-        linkedAt: now.toISOString(), error: null, request: 'sync',
-      }, { merge: true });
-      log('sessie gemaakt,', accounts.length, 'rekening(en)');
-      bank.session = s.session_id; bank.accounts = accounts; bank.request = 'sync';
-    } catch (e) {
-      await bankRef.set({ code: null, codeState: null, error: `Toestemming verwerken mislukt (${e.status || ''})`, errorAt: now.toISOString() }, { merge: true });
-      log('sessie maken mislukt:', e.message, e.detail);
-      return;
-    }
   }
 
   if (!bank.session || !(bank.accounts || []).length) { log('nog geen koppeling'); return; }
