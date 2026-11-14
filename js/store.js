@@ -143,6 +143,14 @@ async function cloudStore(config) {
       unsubs.push(unsub);
       return unsub;
     },
+    watchMeta(name, cb) {
+      const unsub = fb.onSnapshot(fb.doc(db, 'users', uid(), 'meta', name), (snap) => cb(snap.exists() ? snap.data() : {}), (e) => console.error(e));
+      unsubs.push(unsub);
+      return unsub;
+    },
+    async setMeta(name, data) {
+      await fb.setDoc(fb.doc(db, 'users', uid(), 'meta', name), clean(data), { merge: true });
+    },
     async setBank(data) {
       await fb.setDoc(fb.doc(db, 'users', uid(), 'meta', 'bank'), clean(data), { merge: true });
     },

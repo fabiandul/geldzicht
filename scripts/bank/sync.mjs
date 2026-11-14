@@ -5,15 +5,13 @@
 //  - code aanwezig           -> wissel de code in voor een sessie
 //  - sessie geldig           -> haal transacties op (max 1x per dag automatisch, of op verzoek via request === 'sync')
 import crypto from 'node:crypto';
-import { initializeApp, cert } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
-import { parseDescription, makeId } from './parser.mjs';
+import { init, pusher } from './common.mjs';
+import { parseDescription, makeId } from './app/parser.js';
+import * as L from './app/logic.js';
 
 const API = 'https://api.enablebanking.com';
 const APP_ID = process.env.EB_APP_ID;
 const KEY = process.env.EB_PRIVATE_KEY;
-const LOGIN_EMAIL = process.env.LOGIN_EMAIL;
 const REDIRECT = process.env.REDIRECT_URL;
 const MODE = process.env.MODE || 'auto';
 const log = (...a) => console.log('[bank]', ...a);
@@ -86,11 +84,17 @@ function mapTx(t, account) {
 }
 
 async function main() {
-  const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  initializeApp({ credential: cert(sa) });
-  const db = getFirestore();
-  const uid = (await getAuth().getUserByEmail(LOGIN_EMAIL)).uid;
-  const bankRef = db.doc(`users/${uid}/meta/bank`);
+  const { db, uid, meta } = await init();
+  const bankRef = meta('bank');
+  let push = async () => 0;
+  try { push = await pusher(meta); } catch (e) { log('push niet beschikbaar:', e.message); }
+  // Testmelding op verzoek vanuit de app
+  const pushDoc = (await meta('push').get()).data() || {};
+  if (pushDoc.test) {
+    const n = await push({ title: 'Geldzicht', body: 'Meldingen werken. Je krijgt een bericht zodra je salaris binnen is.', tag: 'test' });
+    await meta('push').set({ test: false, lastTest: new Date().toISOString() }, { merge: true });
+    log('testmelding verstuurd naar', n, 'toestel(len)');
+  }
   const bank = (await bankRef.get()).data() || {};
   const now = new Date();
   const today = isoDay(now);
@@ -152,6 +156,7 @@ async function main() {
 
   let added = 0;
   let skipped = 0;
+  const fresh = [];
   let check = null;
   for (const a of bank.accounts) {
     const digits = (a.iban || '').replace(/\D/g, '').replace(/^\d{2}/, '').replace(/^0+/, '');
@@ -219,6 +224,7 @@ async function main() {
       }
       (writes[t.date.slice(0, 7)] ||= {})[t.id] = t;
       ids.add(t.id);
+      fresh.push(t);
       added++;
     }
     for (const [mk, tx] of Object.entries(writes)) {
@@ -229,6 +235,24 @@ async function main() {
       await bankRef.set({ sample: raw.slice(-5) }, { merge: true });
     }
   }
+
+  // Melding bij salaris (geen Tikkies, geen eigen overboekingen)
+  try {
+    const recent = fresh.filter((t) => t.amount > 0 && t.date >= addDays(today, -4));
+    if (recent.length && bank.lastSync) {
+      const all = [...existing, ...fresh];
+      try { L.applyRules(all, { rules: [], payers: [], ...settings }); } catch (e) { log('indelen voor melding lukte niet:', e.message); }
+      const eur = (n) => n.toLocaleString('nl-NL', { style: 'currency', currency: 'EUR' });
+      for (const t of recent) {
+        const tikkie = /tikkie|aab inz/i.test(`${t.name} ${t.desc}`);
+        const pay = t.category === 'salaris' || /\b(salaris|loon|salary)\b/i.test(`${t.desc} ${t.type}`);
+        const big = t.amount >= 1000 && t.category !== 'overboeking-eigen' && !['sparen', 'beleggen', 'terugbetaling'].includes(t.category) && !L.looksLikePerson(t.name);
+        if (!tikkie && (pay || big)) await push({ title: pay ? 'Salaris binnen' : 'Geld binnen', body: `${eur(t.amount)} van ${t.name}`.slice(0, 120), tag: 'in-' + t.id });
+      }
+    }
+    const left = bank.validUntil ? Math.floor((Date.parse(bank.validUntil) - Date.now()) / 86400000) : null;
+    if (left === 7 || left === 2) await push({ title: 'Bankkoppeling verloopt bijna', body: `Nog ${left} dagen. Open Geldzicht en vernieuw je toestemming.`, tag: 'bank-verloopt' });
+  } catch (e) { log('melding mislukt:', e.message); }
 
   await bankRef.set({
     lastSync: now.toISOString(),

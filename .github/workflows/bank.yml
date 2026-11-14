@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'auto, auth of sync'
+        description: 'auto, auth, sync of prices'
         default: 'auto'
 
 permissions:
@@ -36,8 +36,8 @@ jobs:
       - name: Installeren
         working-directory: scripts/bank
         run: |
-          cp ../../js/parser.js parser.mjs
-          npm install --no-save --silent firebase-admin@12.7.0
+          mkdir -p app && cp ../../js/parser.js ../../js/logic.js ../../js/categories.js ../../js/invest.js app/
+          npm install --no-save --silent firebase-admin@12.7.0 web-push@3.6.7
       - name: Ophalen
         working-directory: scripts/bank
         env:
@@ -47,4 +47,6 @@ jobs:
           LOGIN_EMAIL: fabian@geldzicht.app
           REDIRECT_URL: https://fabiandul.github.io/geldzicht/
           MODE: ${{ github.event.inputs.mode || 'auto' }}
-        run: node sync.mjs
+        run: |
+          node sync.mjs
+          node prices.mjs || echo "[koersen] overgeslagen"
