@@ -49,15 +49,16 @@ async function stock(isin, from, known) {
   let idn = known?.idn;
   if (!ev) {
     const s = await get(`https://api.onvista.de/api/v1/instruments/search/facet?searchValue=${isin}`, 'zoek');
-    const hit = (s?.facets || []).flatMap((f) => f.results || []).find((r) => r.isin === isin && r.entityType === 'STOCK');
-    if (!hit) return null;
+    const all = (s?.facets || []).flatMap((f) => f.results || []);
+    const hit = all.find((r) => r.isin === isin && r.entityType === 'STOCK');
+    if (!hit) { const k = `geen aandeel (${all.length ? all.map((r) => r.entityType + (r.isin === isin ? '' : '?')).slice(0, 3).join('/') : 'leeg'})`; stats[k] = (stats[k] || 0) + 1; return null; }
     ev = hit.entityValue;
     const sn = await get(`https://api.onvista.de/api/v1/stocks/${ev}/snapshot`, 'detail');
     idn = sn?.quote?.market?.idNotation;
-    if (!idn) return null;
+    if (!idn) { stats['geen notering'] = (stats['geen notering'] || 0) + 1; return null; }
   }
   const h = await get(`https://api.onvista.de/api/v1/instruments/STOCK/${ev}/eod_history?idNotation=${idn}&range=Y1&startDate=${from}`, 'koers');
-  if (!h || !h.datetimeLast || h.datetimeLast.length < 3) return null;
+  if (!h || !h.datetimeLast || h.datetimeLast.length < 3) { stats['geen historie'] = (stats['geen historie'] || 0) + 1; return null; }
   let cur = h.isoCurrency;
   const d = [];
   let p = [];
