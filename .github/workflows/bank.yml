@@ -1,0 +1,50 @@
+name: Bank ophalen
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # kijkt of er iets te doen is; ophalen gebeurt hooguit 1x per dag automatisch
+    - cron: '17 3 1 * *'     # maandelijks: houdt de geplande taak actief
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'auto, auth of sync'
+        default: 'auto'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bank
+  cancel-in-progress: false
+
+jobs:
+  bank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Maandelijkse keepalive
+        if: github.event.schedule == '17 3 1 * *'
+        run: |
+          date -u +%F > .github/keepalive
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive && git commit -m "Keepalive" && git push || true
+      - name: Installeren
+        working-directory: scripts/bank
+        run: |
+          cp ../../js/parser.js parser.mjs
+          npm install --no-save --silent firebase-admin@12.7.0
+      - name: Ophalen
+        working-directory: scripts/bank
+        env:
+          EB_APP_ID: 012211e4-c957-408d-a432-54032db00721
+          EB_PRIVATE_KEY: ${{ secrets.EB_PRIVATE_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          LOGIN_EMAIL: fabian@geldzicht.app
+          REDIRECT_URL: https://fabiandul.github.io/geldzicht/
+          MODE: ${{ github.event.inputs.mode || 'auto' }}
+        run: node sync.mjs

@@ -137,6 +137,16 @@ async function cloudStore(config) {
       await fb.setDoc(fb.doc(db, 'users', uid(), 'meta', 'settings'), clean(settings));
     },
 
+    // Bankkoppeling: status en verzoeken, verwerkt door de ophaaltaak op GitHub
+    watchBank(cb) {
+      const unsub = fb.onSnapshot(fb.doc(db, 'users', uid(), 'meta', 'bank'), (snap) => cb(snap.exists() ? snap.data() : {}), (e) => console.error(e));
+      unsubs.push(unsub);
+      return unsub;
+    },
+    async setBank(data) {
+      await fb.setDoc(fb.doc(db, 'users', uid(), 'meta', 'bank'), clean(data), { merge: true });
+    },
+
     async wipe() {
       const u = uid();
       const snap = await fb.getDocs(fb.collection(db, 'users', u, 'months'));

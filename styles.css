@@ -462,3 +462,5 @@ details.raw pre { white-space: pre-wrap; word-break: break-all; background: var(
 .pchip.on { background: var(--ink); color: var(--page); border-color: var(--ink); }
 .pchip.on small { color: inherit; opacity: 0.75; }
 .periods + .period { padding-top: 2px; }
+
+.callout.ok { background: color-mix(in srgb, var(--pos) 14%, transparent); }

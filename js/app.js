@@ -7,7 +7,7 @@ import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
 import * as N from './insights.js';
 
-const VERSION = '1.7.3';
+const VERSION = '1.8.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -33,6 +33,8 @@ const S = {
   analyse: 'rapport',
   reportMonth: null,
   nwTab: 'totaal',
+  bank: null,
+  bankSheet: false,
   inv: { kind: 'all', limit: 60 },
   trendGroups: null,
   charts: {},
@@ -292,6 +294,7 @@ function recompute() {
 /* ---------- Sheets ---------- */
 
 function closeSheet() {
+  S.bankSheet = false;
   const root = $('#sheetRoot');
   const sheet = root.querySelector('.sheet');
   const bd = root.querySelector('.sheet-backdrop');
@@ -302,6 +305,7 @@ function closeSheet() {
 }
 
 function openSheet({ title, body, foot = '', onMount }) {
+  S.bankSheet = false;
   const root = $('#sheetRoot');
   root.innerHTML = `
     <div class="sheet-backdrop" data-act="sheet-close"></div>
@@ -1028,6 +1032,9 @@ function openGroup(gid) {
 function recurringData() { return N.detectRecurring(visibleTxs(), S.settings); }
 
 function importReminder() {
+  if (bankLinked()) return bankBanner();
+  const b0 = bankBanner();
+  if (b0) return b0;
   const last = (S.settings.imports || []).slice(-1)[0];
   const end = N.dataEnd(visibleTxs(), S.settings);
   if (!end) return '';
@@ -1910,6 +1917,7 @@ function renderSettings() {
     <section style="margin-top:6px">
       <h2>Gegevens</h2>
       <div class="set-group">
+        ${st.mode === 'cloud' ? `<button class="set-row" data-act="bank"><span class="ico">🔗</span><span class="txt">Bankkoppeling ABN AMRO<small>${esc(bankStatusText())}</small></span><span class="chev">›</span></button>` : ''}
         <button class="set-row" data-act="import"><span class="ico">⤓</span><span class="txt">Bestand importeren<small>${lastImport ? `Laatst: ${fmtDate(lastImport.date)}, ${lastImport.added} nieuw. ` : ''}ABN AMRO TXT of XLS, of de BUX-export (CSV)</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="add-tx"><span class="ico">✍️</span><span class="txt">Transactie toevoegen<small>Iets dat nog niet in je bankbestand staat, bijvoorbeeld een overboeking van vandaag</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="quick"><span class="ico">🗂️</span><span class="txt">Snel indelen<small>Transacties zonder categorie één voor één indelen</small></span><span class="chev">›</span></button>
@@ -1946,6 +1954,100 @@ function renderSettings() {
       </div>
       <p class="help" style="text-align:center">${esc(APP_NAME)} versie ${VERSION}</p>
     </section>`;
+}
+
+/* ---------- Bankkoppeling ---------- */
+
+function bankLinked() { return !!(S.bank && S.bank.session && !S.bank.expired); }
+
+function bankStatusText() {
+  const b = S.bank || {};
+  if (b.error) return `Probleem: ${b.error}`;
+  if (b.expired) return 'Toestemming verlopen, vernieuw hem';
+  if (b.session) return `Gekoppeld${b.lastSync ? `, laatst opgehaald ${fmtDate(b.lastSync.slice(0, 10), false)}` : ', eerste ophaalbeurt volgt'}`;
+  if (b.authUrl) return 'Klaar om toestemming te geven in je ABN AMRO-app';
+  if (b.request === 'auth') return 'Link wordt gemaakt';
+  return 'Elke dag automatisch je transacties ophalen';
+}
+
+function bankDaysLeft() {
+  const v = S.bank && S.bank.validUntil;
+  return v ? Math.floor((new Date(v) - new Date()) / 86400000) : null;
+}
+
+function openBank() {
+  const b = S.bank || {};
+  const days = bankDaysLeft();
+  const waiting = '<p class="help">Dit wordt verwerkt door een taak die elke 10 minuten draait. Je kunt dit scherm open laten; het werkt zichzelf bij.</p>';
+  let body;
+  if (b.session && !b.expired) {
+    body = `
+      <div class="callout ok">Gekoppeld met ABN AMRO. Je transacties worden elke ochtend vanzelf opgehaald.</div>
+      <dl class="kv">
+        <dt>Laatst opgehaald</dt><dd>${b.lastSync ? `${fmtDate(b.lastSync.slice(0, 10))}, ${new Date(b.lastSync).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : 'nog niet, volgt binnen 10 minuten'}</dd>
+        ${b.lastSync ? `<dt>Nieuw bij laatste keer</dt><dd>${b.lastAdded || 0}</dd>` : ''}
+        ${b.balanceCheck != null ? `<dt>Saldo-controle</dt><dd>${b.balanceCheck ? 'klopt met je eerdere bankbestanden' : 'wijkt af van je eerdere bankbestanden'}</dd>` : ''}
+        ${days != null ? `<dt>Toestemming geldig</dt><dd>nog ${days} dagen (tot ${fmtDate(b.validUntil.slice(0, 10), false)})</dd>` : ''}
+      </dl>
+      ${b.request === 'sync' ? `<p class="muted">Ophalen aangevraagd.</p>${waiting}` : ''}
+      ${b.error ? `<div class="callout">${esc(b.error)}</div>` : ''}
+      <p class="help">De bank staat maar een paar opvragingen per dag toe zonder dat jij inlogt. Daarom haalt de app automatisch één keer per dag op.</p>`;
+  } else if (b.authUrl) {
+    body = `
+      <p>Klik hieronder. Je gaat naar ABN AMRO, waar je inlogt en de toestemming goedkeurt in je ABN AMRO-app. Daarna kom je vanzelf terug in Geldzicht.</p>
+      <a class="btn" href="${esc(b.authUrl)}" style="display:block;text-align:center;margin-top:12px">Naar ABN AMRO</a>
+      <p class="help">Alleen meekijken: Geldzicht kan nooit geld overmaken. Je kunt de toestemming altijd intrekken in je ABN AMRO-app.</p>`;
+  } else if (b.request === 'auth') {
+    body = `<p>De link naar ABN AMRO wordt klaargezet.</p>${waiting}`;
+  } else {
+    body = `
+      ${b.expired ? '<div class="callout">Je toestemming is verlopen. Geef opnieuw toestemming om weer automatisch op te halen.</div>' : ''}
+      <p>Koppel je ABN AMRO-betaalrekening, dan haalt Geldzicht elke ochtend vanzelf je nieuwe transacties op. Downloaden en importeren is dan niet meer nodig.</p>
+      <p class="help">Via Enable Banking, een Europees geregistreerde dienst. Alleen meekijken: er kan nooit geld worden overgemaakt.</p>
+      ${b.error ? `<div class="callout">${esc(b.error)}</div>` : ''}`;
+  }
+  const foot = b.session && !b.expired
+    ? `<button class="btn ghost" data-act="bank-auth">Toestemming vernieuwen</button><button class="btn" data-act="bank-sync" ${b.request === 'sync' ? 'disabled' : ''}>Nu ophalen</button>`
+    : b.authUrl ? '<button class="btn ghost" data-act="bank-auth">Nieuwe link maken</button>'
+    : b.request === 'auth' ? '' : '<button class="btn" data-act="bank-auth">Toestemming geven</button>';
+  openSheet({ title: 'Bankkoppeling', body, foot });
+  S.bankSheet = true;
+}
+
+async function bankRequest(data) {
+  try { await S.store.setBank({ ...data, error: null }); } catch (e) { toast('Opslaan mislukt: ' + e.message); }
+}
+
+function startBankWatch() {
+  if (S.store.mode !== 'cloud' || !S.store.watchBank) return;
+  S.store.watchBank((b) => {
+    const prev = S.bank;
+    S.bank = b;
+    if (prev && !prev.lastSync && b.lastSync) toast(`Bank opgehaald: ${b.lastAdded || 0} nieuwe transacties`);
+    if (S.bankSheet && document.querySelector('#sheetRoot .sheet.show')) openBank();
+    if (S.view === 'meer' || S.view === 'overzicht') render();
+  });
+  // Teruggekomen van ABN AMRO met een code
+  let pending = null;
+  try { pending = JSON.parse(sessionStorage.getItem('geldzicht.bankCode') || 'null'); } catch { /* leeg */ }
+  if (pending && pending.code) {
+    try { sessionStorage.removeItem('geldzicht.bankCode'); } catch { /* leeg */ }
+    bankRequest({ code: pending.code, codeState: pending.state || null, codeAt: new Date().toISOString(), authUrl: null });
+    toast('Toestemming ontvangen. Je transacties worden binnen ongeveer 10 minuten opgehaald.');
+  } else if (pending && pending.error) {
+    try { sessionStorage.removeItem('geldzicht.bankCode'); } catch { /* leeg */ }
+    toast('Toestemming bij ABN AMRO is niet gelukt of geannuleerd.');
+  }
+}
+
+function bankBanner() {
+  const b = S.bank;
+  if (!b) return '';
+  const days = bankDaysLeft();
+  if (b.expired || (b.session && days != null && days <= 14)) {
+    return `<button class="banner" data-act="bank"><div><b>${b.expired ? 'Bankkoppeling verlopen' : `Bankkoppeling verloopt over ${Math.max(0, days)} dagen`}</b><span>Geef opnieuw toestemming in je ABN AMRO-app, dan blijft alles vanzelf binnenkomen.</span></div><span class="go">Vernieuwen</span></button>`;
+  }
+  return '';
 }
 
 function openSettingsSheet(which) {
@@ -2430,6 +2532,9 @@ document.addEventListener('click', (e) => {
     case 'analyse-tab': S.analyse = v; render(); break;
     case 'go-analyse': S.view = 'analyse'; S.analyse = v; render(); window.scrollTo(0, 0); break;
     case 'tot-group': openGroup(v); break;
+    case 'bank': openBank(); break;
+    case 'bank-auth': bankRequest({ request: 'auth', requestedAt: new Date().toISOString(), authUrl: null }); S.bank = { ...(S.bank || {}), request: 'auth', authUrl: null }; openBank(); break;
+    case 'bank-sync': bankRequest({ request: 'sync' }); S.bank = { ...(S.bank || {}), request: 'sync' }; openBank(); break;
     case 'go-report': S.view = 'analyse'; S.analyse = 'rapport'; S.reportMonth = v; render(); window.scrollTo(0, 0); break;
     case 'report-prev': S.reportMonth = shiftMonth(S.reportMonth || defaultReportMonth(), -1); render(); break;
     case 'report-next': S.reportMonth = shiftMonth(S.reportMonth || defaultReportMonth(), 1); render(); break;
@@ -2598,9 +2703,18 @@ async function loadData() {
   if (S.txs.length) recompute();
   S.period = { mode: 'month', anchor: defaultAnchor() };
   render();
+  startBankWatch();
 }
 
 async function start() {
+  // Terugkomst van ABN AMRO: code bewaren en adresbalk opschonen
+  try {
+    const q = new URLSearchParams(location.search);
+    if (q.get('code') || q.get('error')) {
+      sessionStorage.setItem('geldzicht.bankCode', JSON.stringify({ code: q.get('code'), state: q.get('state'), error: q.get('error') }));
+      history.replaceState(null, '', location.pathname);
+    }
+  } catch { /* leeg */ }
   applyTheme();
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { applyTheme(); render(); });
   S.store = await createStore(firebaseConfig);
