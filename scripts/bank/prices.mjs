@@ -1,45 +1,75 @@
 // Haalt eenmaal per dag slotkoersen op voor je open BUX-posities en zet ze (in euro) in je database.
+// Bronnen: justETF (ETF's), onvista (aandelen) en de ECB (wisselkoersen). Dit zijn geen officiele koppelingen.
 // In het logboek komen alleen aantallen, geen posities of bedragen.
 import { init } from './common.mjs';
-import { buildPortfolio } from './app/invest.js';
+import { buildPortfolio, assetType } from './app/invest.js';
 
-const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36', Accept: 'application/json' };
+const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) Chrome/126 Safari/537.36', Accept: 'application/json' };
 const log = (...a) => console.log('[koersen]', ...a);
 const stats = {};
-const get = async (url) => {
-  for (const host of ['query1', 'query2']) {
-    try {
-      const r = await fetch(url.replace('HOST', host), { headers: UA });
-      if (r.ok) return await r.json();
-      stats[`${url.includes('/search') ? 'zoek' : 'koers'} ${r.status}`] = (stats[`${url.includes('/search') ? 'zoek' : 'koers'} ${r.status}`] || 0) + 1;
-    } catch (e) { stats.netwerk = (stats.netwerk || 0) + 1; }
-  }
-  return null;
-};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function get(url, kind, text) {
+  try {
+    const r = await fetch(url, { headers: UA });
+    if (r.ok) return text ? await r.text() : await r.json();
+    stats[`${kind} ${r.status}`] = (stats[`${kind} ${r.status}`] || 0) + 1;
+  } catch { stats[`${kind} netwerk`] = (stats[`${kind} netwerk`] || 0) + 1; }
+  return null;
+}
+const iso = (d) => d.toISOString().slice(0, 10);
+const at = (s, date) => { let v = null; for (let i = 0; i < s.d.length; i++) { if (s.d[i] <= date) v = s.p[i]; else break; } return v; };
 
-async function chart(symbol) {
-  const j = await get(`https://HOST.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`);
-  const r = j?.chart?.result?.[0];
-  if (!r || !r.timestamp) return null;
-  const close = r.indicators?.quote?.[0]?.close || [];
-  const d = [];
-  const p = [];
-  r.timestamp.forEach((ts, i) => { if (close[i] != null) { d.push(new Date(ts * 1000).toISOString().slice(0, 10)); p.push(close[i]); } });
-  return { cur: r.meta.currency, d, p };
+async function etf(isin, from, to) {
+  const j = await get(`https://www.justetf.com/api/etfs/${isin}/performance-chart?locale=en&currency=EUR&valuesType=MARKET_VALUE&reduceData=false&includeDividends=false&features=DIVIDENDS&dateFrom=${from}&dateTo=${to}`, 'etf');
+  const series = (j?.series || []).filter((x) => x.value?.raw > 0);
+  if (series.length < 3) return null;
+  return { src: 'justetf', cur: 'EUR', d: series.map((x) => x.date), p: series.map((x) => x.value.raw) };
 }
 
-async function candidates(isin, name) {
-  const out = [];
-  for (const q of [isin, name]) {
-    const j = await get(`https://HOST.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=8&newsCount=0`);
-    for (const x of j?.quotes || []) if (['EQUITY', 'ETF'].includes(x.quoteType) && !out.includes(x.symbol)) out.push(x.symbol);
-    if (out.length) break;
+const fx = {};
+async function rates(cur, from) {
+  if (!(cur in fx)) {
+    const csv = await get(`https://data-api.ecb.europa.eu/service/data/EXR/D.${cur}.EUR.SP00.A?startPeriod=${from}&format=csvdata`, 'ecb', true);
+    fx[cur] = null;
+    if (csv) {
+      const rows = csv.trim().split(/\r?\n/).map((l) => l.split(','));
+      const iT = rows[0].indexOf('TIME_PERIOD');
+      const iV = rows[0].indexOf('OBS_VALUE');
+      const d = [];
+      const p = [];
+      for (const r of rows.slice(1)) { const v = Number(r[iV]); if (v > 0) { d.push(r[iT]); p.push(v); } }
+      if (d.length) fx[cur] = { d, p };
+    }
   }
-  return out.slice(0, 6);
+  return fx[cur];
 }
 
-const at = (series, date) => { let v = null; for (let i = 0; i < series.d.length; i++) { if (series.d[i] <= date) v = series.p[i]; else break; } return v; };
+async function stock(isin, from, known) {
+  let ev = known?.ev;
+  let idn = known?.idn;
+  if (!ev) {
+    const s = await get(`https://api.onvista.de/api/v1/instruments/search/facet?searchValue=${isin}`, 'zoek');
+    const hit = (s?.facets || []).flatMap((f) => f.results || []).find((r) => r.isin === isin && r.entityType === 'STOCK');
+    if (!hit) return null;
+    ev = hit.entityValue;
+    const sn = await get(`https://api.onvista.de/api/v1/stocks/${ev}/snapshot`, 'detail');
+    idn = sn?.quote?.market?.idNotation;
+    if (!idn) return null;
+  }
+  const h = await get(`https://api.onvista.de/api/v1/instruments/STOCK/${ev}/eod_history?idNotation=${idn}&range=Y1&startDate=${from}`, 'koers');
+  if (!h || !h.datetimeLast || h.datetimeLast.length < 3) return null;
+  let cur = h.isoCurrency;
+  const d = [];
+  let p = [];
+  h.datetimeLast.forEach((ts, i) => { if (h.last[i] > 0) { d.push(iso(new Date(ts * 1000))); p.push(h.last[i]); } });
+  if (cur === 'GBX' || cur === 'GBp') { p = p.map((v) => v / 100); cur = 'GBP'; }
+  if (cur !== 'EUR') {
+    const r = await rates(cur, from);
+    if (!r) return null;
+    p = p.map((v, i) => v / (at(r, d[i]) || r.p[0]));
+  }
+  return { src: 'onvista', ev, idn, cur, d, p };
+}
 
 async function main() {
   const { meta } = await init();
@@ -48,55 +78,38 @@ async function main() {
   if (!events.length) { log('geen beleggingen'); return; }
   const open = buildPortfolio(events).open;
   const prev = (await meta('prices').get()).data() || {};
-  const today = new Date().toISOString().slice(0, 10);
-  const same = open.every((p) => prev.items?.[p.isin]);
-  if (process.env.MODE !== 'prices' && prev.updated?.slice(0, 10) === today && same) { log('vandaag al opgehaald'); return; }
+  const now = new Date();
+  const today = iso(now);
+  const complete = open.every((p) => prev.items?.[p.isin]);
+  // Eenmaal per dag, 's avonds na de slotkoersen; of meteen als er een positie bij is gekomen
+  if (process.env.MODE !== 'prices' && complete && (prev.updated?.slice(0, 10) === today || now.getUTCHours() < 4)) { log('niets te doen'); return; }
+  if (process.env.MODE !== 'prices' && !complete && prev.tried?.slice(0, 13) === now.toISOString().slice(0, 13)) { log('dit uur al geprobeerd'); return; }
 
-  const fx = {};
-  const fxFor = async (cur) => {
-    if (cur === 'EUR') return null;
-    const c = cur === 'GBp' ? 'GBP' : cur;
-    if (!(c in fx)) fx[c] = await chart(`EUR${c}=X`);
-    return fx[c];
-  };
-  const toEur = async (s) => {
-    if (s.cur === 'EUR') return { d: s.d, p: s.p };
-    const f = await fxFor(s.cur);
-    if (!f) return null;
-    const k = s.cur === 'GBp' ? 100 : 1;
-    const p = s.d.map((date, i) => { const rate = at(f, date) || f.p[0]; return s.p[i] / k / rate; });
-    return { d: s.d, p };
-  };
-
+  const from = iso(new Date(now.getTime() - 372 * 86400000));
   const items = {};
   let ok = 0;
-  let noCand = 0;
   let noFit = 0;
   for (const pos of open) {
-    const known = prev.items?.[pos.isin]?.symbol;
-    const list = known ? [known] : await candidates(pos.isin, pos.name);
+    const known = prev.items?.[pos.isin];
+    let s = null;
+    if (assetType(pos.name) === 'etf') s = await etf(pos.isin, from, today);
+    if (!s) s = await stock(pos.isin, from, known);
+    if (!s && assetType(pos.name) !== 'etf') s = await etf(pos.isin, from, today);
+    await sleep(300);
+    if (!s) { if (known) items[pos.isin] = known; continue; }
     // Controle: de koers moet passen bij wat je zelf per stuk betaalde
     const buys = events.filter((e) => e.kind === 'buy' && e.isin === pos.isin && e.qty > 0);
     const last = buys[buys.length - 1];
-    let best = null;
-    for (const sym of list) {
-      const raw = await chart(sym);
-      await sleep(250);
-      if (!raw || raw.d.length < 5) continue;
-      const eur = await toEur(raw);
-      if (!eur) continue;
-      let fits = true;
-      if (last && last.t.slice(0, 10) >= eur.d[0]) {
-        const paid = -last.eur / last.qty;
-        const then = at(eur, last.t.slice(0, 10));
-        fits = then != null && paid > 0 && then / paid > 0.8 && then / paid < 1.25;
-      }
-      if (fits) { best = { symbol: sym, cur: raw.cur, d: eur.d, p: eur.p.map((v) => Math.round(v * 10000) / 10000) }; break; }
+    if (last && last.t.slice(0, 10) >= s.d[0]) {
+      const paid = -last.eur / last.qty;
+      const then = at(s, last.t.slice(0, 10));
+      if (!(then != null && paid > 0 && then / paid > 0.8 && then / paid < 1.25)) { noFit++; continue; }
     }
-    if (best) { items[pos.isin] = best; ok++; } else if (!list.length) noCand++; else noFit++;
+    items[pos.isin] = { ...s, p: s.p.map((v) => Math.round(v * 10000) / 10000) };
+    ok++;
   }
-  await meta('prices').set({ updated: new Date().toISOString(), items, found: ok, total: open.length });
-  log('klaar:', ok, 'van', open.length, 'posities met koers', JSON.stringify(stats), 'geen kandidaat:', noCand, 'past niet:', noFit);
+  await meta('prices').set({ updated: now.toISOString(), tried: now.toISOString(), items, found: ok, total: open.length });
+  log('klaar:', ok, 'van', open.length, 'posities met koers', JSON.stringify(stats), 'past niet:', noFit);
 }
 
 main().catch((e) => { log('fout:', e.message); process.exitCode = 1; });
