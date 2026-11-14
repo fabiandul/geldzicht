@@ -66,9 +66,10 @@ async function stock(isin, from, known) {
   if (cur === 'GBX' || cur === 'GBp') { p = p.map((v) => v / 100); cur = 'GBP'; }
   if (cur !== 'EUR') {
     const r = await rates(cur, from);
-    if (!r) return null;
+    if (!r) { stats[`geen wisselkoers ${cur}`] = (stats[`geen wisselkoers ${cur}`] || 0) + 1; return null; }
     p = p.map((v, i) => v / (at(r, d[i]) || r.p[0]));
   }
+  stats[`ok ${cur}`] = (stats[`ok ${cur}`] || 0) + 1;
   return { src: 'onvista', ev, idn, cur, d, p };
 }
 
