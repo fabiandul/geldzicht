@@ -10,7 +10,7 @@ const stats = {};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function get(url, kind, text) {
   try {
-    const r = await fetch(url, { headers: UA });
+    const r = await fetch(url, { headers: text ? { ...UA, Accept: 'text/csv' } : UA });
     if (r.ok) return text ? await r.text() : await r.json();
     stats[`${kind} ${r.status}`] = (stats[`${kind} ${r.status}`] || 0) + 1;
   } catch { stats[`${kind} netwerk`] = (stats[`${kind} netwerk`] || 0) + 1; }
