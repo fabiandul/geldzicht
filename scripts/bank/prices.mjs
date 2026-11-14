@@ -5,12 +5,14 @@ import { buildPortfolio } from './app/invest.js';
 
 const UA = { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36', Accept: 'application/json' };
 const log = (...a) => console.log('[koersen]', ...a);
+const stats = {};
 const get = async (url) => {
   for (const host of ['query1', 'query2']) {
     try {
       const r = await fetch(url.replace('HOST', host), { headers: UA });
       if (r.ok) return await r.json();
-    } catch { /* volgende */ }
+      stats[`${url.includes('/search') ? 'zoek' : 'koers'} ${r.status}`] = (stats[`${url.includes('/search') ? 'zoek' : 'koers'} ${r.status}`] || 0) + 1;
+    } catch (e) { stats.netwerk = (stats.netwerk || 0) + 1; }
   }
   return null;
 };
@@ -68,6 +70,8 @@ async function main() {
 
   const items = {};
   let ok = 0;
+  let noCand = 0;
+  let noFit = 0;
   for (const pos of open) {
     const known = prev.items?.[pos.isin]?.symbol;
     const list = known ? [known] : await candidates(pos.isin, pos.name);
@@ -89,10 +93,10 @@ async function main() {
       }
       if (fits) { best = { symbol: sym, cur: raw.cur, d: eur.d, p: eur.p.map((v) => Math.round(v * 10000) / 10000) }; break; }
     }
-    if (best) { items[pos.isin] = best; ok++; }
+    if (best) { items[pos.isin] = best; ok++; } else if (!list.length) noCand++; else noFit++;
   }
   await meta('prices').set({ updated: new Date().toISOString(), items, found: ok, total: open.length });
-  log('klaar:', ok, 'van', open.length, 'posities met koers');
+  log('klaar:', ok, 'van', open.length, 'posities met koers', JSON.stringify(stats), 'geen kandidaat:', noCand, 'past niet:', noFit);
 }
 
 main().catch((e) => { log('fout:', e.message); process.exitCode = 1; });
