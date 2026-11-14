@@ -5,15 +5,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
-          p() { echo "== $1"; curl -s -m 20 -A "$UA" -o /tmp/o -w "%{http_code} %{size_download}\n" "${@:2}"; head -c 400 /tmp/o; echo; }
-          p ychart "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=5d&interval=1d"
-          p ychart2 "https://query2.finance.yahoo.com/v8/finance/chart/VWCE.DE?range=5d&interval=1d"
-          p ysearch "https://query2.finance.yahoo.com/v1/finance/search?q=IE00BK5BQT80&quotesCount=5&newsCount=0"
-          p figi -X POST -H "Content-Type: application/json" -d '[{"idType":"ID_ISIN","idValue":"IE00BK5BQT80"},{"idType":"ID_ISIN","idValue":"US5951121038"}]' "https://api.openfigi.com/v3/mapping"
-          p stooq "https://stooq.com/q/d/l/?s=aapl.us&i=d"
-          p stooqde "https://stooq.com/q/d/l/?s=vwce.de&i=d"
-          p justetf "https://www.justetf.com/api/etfs/IE00BK5BQT80/performance-chart?locale=en&currency=EUR&valuesType=MARKET_VALUE&reduceData=false&includeDividends=false&features=DIVIDENDS&dateFrom=2026-10-01&dateTo=2026-11-14"
-          p ecb "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?lastNObservations=3&format=csvdata"
-          p ls "https://www.ls-tc.de/_rpc/json/instrument/search/main?q=US5951121038&localeId=2"
-          p tg "https://api.onvista.de/api/v1/instruments/search/facet?searchValue=US5951121038"
+          UA="Mozilla/5.0 (X11; Linux x86_64) Chrome/126 Safari/537.36"
+          S=$(curl -s -A "$UA" "https://api.onvista.de/api/v1/instruments/search/facet?searchValue=US5951121038")
+          echo "== search"; echo "$S" | jq -c '.facets[] | {type, r: [.results[]? | {entityType, entityValue, name, isin, urls: (.urls|keys?)}]}' | head -c 900; echo
+          EV=$(echo "$S" | jq -r '[.facets[].results[]?][0].entityValue'); echo "ev $EV"
+          SN=$(curl -s -A "$UA" "https://api.onvista.de/api/v1/stocks/$EV/snapshot")
+          echo "== snapshot keys"; echo "$SN" | jq -c 'keys' | head -c 500; echo
+          echo "$SN" | jq -c '.quote | {last, isoCurrency, market: .market, datetimeLast}' | head -c 600; echo
+          echo "$SN" | jq -c '[.quoteList.list[]? | {id: .market.idNotation, n: .market.name, c: .isoCurrency, v: .volume}]' | head -c 900; echo
+          IDN=$(echo "$SN" | jq -r '.quote.market.idNotation')
+          for u in "https://api.onvista.de/api/v1/instruments/STOCK/$EV/chart_history?endDate=2026-11-14&idNotation=$IDN&resolution=1D&startDate=2026-10-14" "https://api.onvista.de/api/v1/instruments/STOCK/$EV/eod_history?idNotation=$IDN&range=M1&startDate=2026-10-14"; do
+            echo "== $u"; curl -s -A "$UA" -o /tmp/o -w "%{http_code} %{size_download}\n" "$u"; head -c 500 /tmp/o; echo
+          done
