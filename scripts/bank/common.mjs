@@ -26,6 +26,7 @@ export async function pusher(meta) {
     const subs = doc.subs || {};
     let sent = 0;
     for (const [id, sub] of Object.entries(subs)) {
+      if (!sub || !sub.endpoint) continue;
       try { await webpush.sendNotification(sub, JSON.stringify(payload)); sent++; } catch (e) {
         if (e.statusCode === 404 || e.statusCode === 410) { delete subs[id]; await meta('push').update({ [`subs.${id}`]: (await import('firebase-admin/firestore')).FieldValue.delete() }); }
         else console.log('[push] versturen mislukt', e.statusCode || e.message);

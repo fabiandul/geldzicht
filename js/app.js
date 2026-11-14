@@ -6,8 +6,10 @@ import * as L from './logic.js';
 import { buildDemoTxt, DEMO_SETTINGS } from './demo.js';
 import * as I from './invest.js';
 import * as N from './insights.js';
+import { logoDomain, logoUrl } from './logos.js';
+import * as LK from './lock.js';
 
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -35,7 +37,9 @@ const S = {
   nwTab: 'totaal',
   bank: null,
   bankSheet: false,
-  inv: { kind: 'all', limit: 60 },
+  inv: { kind: 'all', limit: 60, range: '1M' },
+  prices: null,
+  push: null,
   trendGroups: null,
   charts: {},
   dirtyIds: new Set(),
@@ -391,7 +395,6 @@ function render() {
         <div class="period-label">${esc(periodLabel())}${sub ? `<small>${esc(sub)}</small>` : ''}</div>
         <button class="period-btn" data-act="period-next" aria-label="Volgende periode" ${canNext ? '' : 'disabled'} ${navigable ? '' : 'style="visibility:hidden"'}>›</button>
       </div>` : ''}
-      ${S.view === 'overzicht' && S.txs.length ? `<div class="pre-main">${safeTotals()}</div>` : ''}
       <main id="main">${renderView()}</main>
     </div>
     <nav class="tabbar" aria-label="Hoofdmenu"><div class="tabbar-inner">
@@ -423,6 +426,7 @@ function afterRender() {
   if (S.view === 'analyse') { if (S.analyse === 'rapport') drawReportCharts(); else drawAnalyseCharts(); }
   if (S.view === 'vermogen') { if (S.nwTab === 'beleggen' && hasBux()) drawInvestChart(); else drawNetWorthChart(); }
   if (S.view === 'transacties') {
+    drawSearchCharts();
     const inp = $('#txSearch');
     if (inp && S.tx.focus) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); S.tx.focus = false; }
   }
@@ -442,6 +446,83 @@ function renderEmpty() {
 }
 
 /* ---------- Overzicht ---------- */
+
+// Icoon van een transactie: logo van het bedrijf als we het kennen, anders het categorie-icoon
+function ico(name, emoji, color, cls = 'tx-ico') {
+  const d = S.settings.logos === false ? null : logoDomain(name);
+  return `<span class="${cls}${d ? ' has-logo' : ''}" style="background:color-mix(in srgb, ${color} 16%, transparent)">${d ? `<img class="logo" src="${logoUrl(d)}" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="logo-fb">${emoji}</span>` : emoji}</span>`;
+}
+document.addEventListener('error', (e) => { if (e.target.classList && e.target.classList.contains('logo')) e.target.parentElement.classList.add('failed'); }, true);
+document.addEventListener('load', (e) => { if (e.target.classList && e.target.classList.contains('logo') && e.target.naturalWidth < 24) e.target.parentElement.classList.add('failed'); }, true);
+
+const rr2 = (n) => Math.round(n * 100) / 100;
+const pctTxt = (n) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toLocaleString('nl-NL', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+const upDown = (n) => (n > 0.004 ? 'up' : n < -0.004 ? 'down' : '');
+
+/* ---------- Koersen (automatisch opgehaald) ---------- */
+
+function priceItem(isin) { return S.prices && S.prices.items ? S.prices.items[isin] : null; }
+function priceAt(isin, date) {
+  const it = priceItem(isin);
+  if (!it) return null;
+  let v = null;
+  for (let i = 0; i < it.d.length; i++) { if (it.d[i] <= date) v = it.p[i]; else break; }
+  return v;
+}
+function lastPriceDate() {
+  let last = '';
+  for (const it of Object.values((S.prices && S.prices.items) || {})) { const d = it.d[it.d.length - 1]; if (d > last) last = d; }
+  return last || null;
+}
+
+// Momentopnames op basis van de koersen: wekelijks en per maandeinde, plus de laatste koersdag.
+let snapCache = { key: null, list: [] };
+function autoSnaps() {
+  const items = S.prices && S.prices.items;
+  const events = (S.settings.invest && S.settings.invest.events) || [];
+  if (!items || !events.length || !Object.keys(items).length) return [];
+  const key = `${S.prices.updated}|${events.length}`;
+  if (snapCache.key === key) return snapCache.list;
+  let first = '9999';
+  const last = lastPriceDate();
+  for (const it of Object.values(items)) if (it.d[0] < first) first = it.d[0];
+  const dates = new Set([last]);
+  for (let d = last; d >= first; d = addDays(d, -7)) dates.add(d);
+  for (const m of L.monthsBetween(first.slice(0, 7), last.slice(0, 7))) { const e = L.lastDayOfMonth(m); if (e >= first && e <= last) dates.add(e); }
+  const list = [...dates].sort().map((d) => {
+    const pf = I.buildPortfolio(events, `${d}T23:59:59`);
+    const positions = [];
+    let v = pf.tot.cash;
+    for (const p of pf.open) { const pr = priceAt(p.isin, d); if (pr != null) { positions.push({ name: p.name, value: rr2(p.qty * pr) }); v += p.qty * pr; } }
+    if (!positions.length || positions.length < pf.open.length / 2) return null;
+    return { date: d, at: `${d}T23:59:59`, value: rr2(v), positions, auto: true };
+  }).filter(Boolean);
+  snapCache = { key, list };
+  return list;
+}
+function allSnaps() { return [...(S.settings.investSnapshots || []), ...autoSnaps()]; }
+function SX() { return { ...S.settings, investSnapshots: allSnaps() }; }
+
+const INV_RANGES = [['1D', 'Dag'], ['1W', 'Week'], ['1M', 'Maand'], ['3M', '3 mnd'], ['YTD', 'Dit jaar'], ['1Y', 'Jaar'], ['all', 'Totaal']];
+const INV_RANGE_TEXT = { '1D': 'sinds de vorige koersdag', '1W': 'in een week', '1M': 'in een maand', '3M': 'in 3 maanden', YTD: 'dit jaar', '1Y': 'in een jaar', all: 'sinds aankoop' };
+// Koersverandering van een positie over een periode, in procent en in euro (aankopen in die periode tellen niet als winst)
+function posChange(p, range) {
+  const it = priceItem(p.isin);
+  if (!it || p.value == null || it.p.length < 2) return null;
+  const now = it.p[it.p.length - 1];
+  if (range === 'all') return { eur: p.value - p.cost, pct: p.cost ? (p.value / p.cost - 1) * 100 : 0, price: now };
+  const last = it.d[it.d.length - 1];
+  const from = range === '1D' ? it.d[it.d.length - 2] : range === '1W' ? addDays(last, -7) : range === '1M' ? addMonthsDate(last, -1) : range === '3M' ? addMonthsDate(last, -3) : range === 'YTD' ? `${Number(last.slice(0, 4)) - 1}-12-31` : addDays(last, -365);
+  const then = priceAt(p.isin, from) ?? it.p[0];
+  const fromT = `${from}T23:59:59`;
+  let qtyThen = 0;
+  let net = 0;
+  for (const e of S.settings.invest.events) {
+    if (e.isin !== p.isin || (e.kind !== 'buy' && e.kind !== 'sell')) continue;
+    if (e.t <= fromT) qtyThen += e.kind === 'buy' ? e.qty : -e.qty; else net += -e.eur;
+  }
+  return { eur: p.value - qtyThen * then - net, pct: (now / then - 1) * 100, price: now };
+}
 
 function groupColor(id) { return GROUP_BY_ID[id]?.color || '#a8a29e'; }
 
@@ -463,96 +544,133 @@ function renderOverview() {
   const pr = prevRange();
   const ps = pr ? L.summarize(vt, S.settings, pr) : null;
   const main = mainAcc();
-  const inPeriod = vt.filter((t) => t.account === main && L.inRange(t, range));
-  const uncategorized = inPeriod.filter((t) => t.category === UNCATEGORIZED || t.category === UNCATEGORIZED_IN).length;
   const unmatched = vt.filter((t) => t.unmatched).length;
-  const guessed = inPeriod.filter((t) => t.by === 'gok' && !t.manual && !t.excluded).length;
-  const net = splitEur(s.net);
-  const moved = s.saved + s.invested;
-  const fromIncomeInvested = s.invested - s.shifted;
-
-  // Lint: waar het binnengekomen geld naartoe ging
-  const groups = Object.entries(s.byGroup).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
-  const segs = groups.map(([g, v]) => ({ label: GROUP_BY_ID[g].name, value: v, color: groupColor(g), act: `data-act="group" data-v="${g}"` }));
-  if (s.saved > 0) segs.push({ label: 'Sparen', value: s.saved, color: cssVar('--s-spaar') });
-  if (fromIncomeInvested > 0) segs.push({ label: 'Beleggen', value: fromIncomeInvested, color: cssVar('--s-invest') });
-  const used = segs.reduce((a, b) => a + b.value, 0);
-  const left = s.income - used;
-  if (left > 0) segs.push({ label: 'Nog over', value: left, cls: 'left' });
-  const total = Math.max(s.income, used) || 1;
-  const legendSegs = segs.filter((x) => x.value / total >= 0.04 || x.cls === 'left' || x.label === 'Sparen' || x.label === 'Beleggen');
-
-  const ribbonTitle = s.income > 0 ? `Waar je inkomen in ${periodNoun()} heen ging` : `Waar je geld in ${periodNoun()} heen ging`;
-  const sub = s.income > 0
-    ? `Je ontving <strong>${eur(s.income)}</strong> en gaf <strong>${eur(s.expense)}</strong> uit.${moved > 0 ? ` Daarnaast zette je <strong>${eur(moved)}</strong> opzij.` : ''}`
-    : `Je gaf <strong>${eur(s.expense)}</strong> uit.`;
-  const shiftNote = s.shifted > 0 ? `<p class="help" style="margin:-8px 0 14px">Je verplaatste ook <strong>${eur(s.shifted)}</strong> van je spaarrekening naar beleggen. Dat is een verschuiving binnen je vermogen en telt hier niet mee.</p>` : '';
-
-  const merchants = Object.values(s.byMerchant).filter((m) => m.total > 0).sort((a, b) => b.total - a.total).slice(0, 6);
-  const maxM = merchants[0]?.total || 1;
+  const nQ = questionGroups().length;
   const rmap = L.reimbursementMap(vt);
-  const recentMatches = vt.filter((t) => t.reimbFor && t.reimbFor.length && L.inRange(t, range)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
+  const d = totalsData();
+  const moved = s.saved + s.invested;
+
+  // Vermogen: stand, verschil over de periode en verdeling
+  const nwSum = d.nw.reduce((a, x) => a + x.value, 0) || 1;
+  const startM = shiftMonth(range.from.slice(0, 7), -1);
+  const nwStart = L.netWorthSeries(vt, SX(), [startM])[0];
+  const nwDiff = nwStart && nwStart.total != null && dataMonths()[0] <= startM ? d.nwTotal - nwStart.total : null;
+
+  // Uitgaven: top 5 categorieen, de rest uitklapbaar
+  const top = d.groups.slice(0, 5);
+  const rest = d.groups.slice(5);
+  const restTotal = rest.reduce((a, [, v]) => a + v, 0);
+  const pct = (v) => (d.exTotal > 0 ? `${Math.round((v / d.exTotal) * 100)}%` : '');
+  const gRow = ([g, v]) => `<li><button data-act="tot-group" data-v="${g}"><i style="background:${groupColor(g)}"></i><span class="n">${GROUP_BY_ID[g].icon} ${esc(GROUP_BY_ID[g].name)}</span><span class="p">${pct(v)}</span><span class="v num">${eur(v, true)}</span></button></li>`;
+
+  // Beleggingen
+  let invCard = '';
+  if (hasBux()) {
+    const { rows, val, pf } = invState();
+    const withP = rows.filter((r) => r.price != null && r.value != null);
+    const day = withP.map((r) => ({ r, c: posChange(r, '1D') })).filter((x) => x.c);
+    const dayEur = day.reduce((a, x) => a + x.c.eur, 0);
+    const dayBase = day.reduce((a, x) => a + x.r.value - x.c.eur, 0);
+    const month = withP.map((r) => ({ r, c: posChange(r, '1M') })).filter((x) => x.c).sort((x, y) => y.c.pct - x.c.pct);
+    const movers = month.length > 4 ? [...month.slice(0, 2), ...month.slice(-2)] : month;
+    const gain = val.value - pf.tot.netDeposits;
+    invCard = `
+      <div class="card">
+        <div class="card-head"><b>Beleggingen</b><button class="link" data-act="nw-tab" data-v="beleggen">Alle posities</button></div>
+        <button class="card-tap" data-act="nw-tab" data-v="beleggen">
+          <div class="big num">${eur(val.value, true)}</div>
+          <div class="card-sub">${day.length ? `<span class="${upDown(dayEur)}">${sgn(dayEur)} (${pctTxt(dayBase > 0 ? (dayEur / dayBase) * 100 : 0)})</span> laatste koersdag, ` : ''}<span class="${upDown(gain)}">${sgn(gain, true)}</span> totaal rendement</div>
+        </button>
+        ${movers.length ? `<div class="mini-title">Grootste bewegingen deze maand</div><ul class="mini-rows">${movers.map(({ r, c }) => `<li><button data-act="inv-pos" data-v="${esc(r.isin)}"><span class="n">${esc(r.name)}</span><span class="p ${upDown(c.pct)}">${pctTxt(c.pct)}</span><span class="v num">${eur(r.value, true)}</span></button></li>`).join('')}</ul>` : '<p class="help" style="margin-bottom:0">Koersen worden elke avond automatisch opgehaald.</p>'}
+      </div>`;
+  }
+
+  const merchants = Object.values(s.byMerchant).filter((m) => m.total > 0).sort((a, b) => b.total - a.total).slice(0, 5);
+  const maxM = merchants[0]?.total || 1;
+  let latest = vt.filter((t) => t.account === main && L.inRange(t, range)).sort((a, b) => b.date.localeCompare(a.date) || (b.time || '').localeCompare(a.time || '')).slice(0, 5);
+  const latestAll = !latest.length;
+  if (latestAll) latest = vt.filter((t) => t.account === main).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+  const recentMatches = vt.filter((t) => t.reimbFor && t.reimbFor.length && L.inRange(t, range)).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3);
+  const expected = S.period.mode === 'month' ? overviewExpected(S.period.anchor) : '';
+  const partial = isPartialPeriod() ? ' tot nu toe' : '';
 
   return `
-    <section class="hero">
-      <p class="hero-label">${s.net >= 0 ? 'Over' : 'Tekort'} in ${esc(periodNoun())}${isPartialPeriod() ? ' tot nu toe' : ''}</p>
-      <div class="hero-num num ${s.net < 0 ? 'neg' : ''}"><span>${net.main}</span><span class="cents">${net.cents}</span></div>
-      <p class="hero-sub">${sub}</p>
-      ${shiftNote}
-      <div class="ribbon" role="img" aria-label="${esc(ribbonTitle)}">
-        ${segs.map((x) => `<span ${x.act || ''} class="${x.cls || ''}" style="flex-grow:${x.value};${x.color ? `background:${x.color}` : ''}" title="${esc(x.label)}: ${eur(x.value)}"></span>`).join('')}
-      </div>
-      <div class="ribbon-legend">
-        ${legendSegs.map((x) => `<span><i style="background:${x.color || 'var(--line)'}"></i>${esc(x.label)} ${Math.round((x.value / total) * 100)}%</span>`).join('')}
-      </div>
-    </section>
-
     ${importReminder()}
-    ${uncategorized ? `<button class="banner" data-act="quick"><div><b>${uncategorized} ${uncategorized === 1 ? 'transactie' : 'transacties'} nog niet ingedeeld</b><span>Deel ze in, dan onthoudt de app het voor de volgende keer.</span></div><span class="go">Indelen</span></button>` : ''}
-    ${guessed ? `<button class="banner" data-act="guesses"><div><b>${guessed} ${guessed === 1 ? 'transactie' : 'transacties'} geschat ingedeeld</b><span>Niet herkend, dus de app heeft een categorie gegokt. Bevestig of verbeter ze, dan weet de app het zeker.</span></div><span class="go">Nalopen</span></button>` : ''}
-    ${unmatched ? `<button class="banner" data-act="unmatched"><div><b>${unmatched} ${unmatched === 1 ? 'terugbetaling' : 'terugbetalingen'} niet gekoppeld</b><span>Geen uitgave met precies dat bedrag gevonden. Koppel ze zelf.</span></div><span class="go">Bekijken</span></button>` : ''}
+    ${nQ || unmatched ? `<div class="todo-strip">
+      ${nQ ? `<button class="todo" data-act="questions"><b>${nQ}</b> ${nQ === 1 ? 'vraag' : 'vragen'} over je transacties</button>` : ''}
+      ${unmatched ? `<button class="todo" data-act="unmatched"><b>${unmatched}</b> ${unmatched === 1 ? 'terugbetaling' : 'terugbetalingen'} niet gekoppeld</button>` : ''}
+    </div>` : ''}
 
-    <section>
-      <div class="stats">
-        <div class="stat"><div class="stat-label">Inkomsten</div><div class="stat-value num">${eur(s.income, true)}</div><div class="stat-delta">${ps ? deltaText(s.income, ps.income) : ''}</div></div>
-        <div class="stat"><div class="stat-label">Uitgaven</div><div class="stat-value num">${eur(s.expense, true)}</div><div class="stat-delta">${ps ? deltaText(s.expense, ps.expense, true) : ''}</div></div>
-        <div class="stat"><div class="stat-label">Opzij gezet</div><div class="stat-value num">${eur(moved, true)}</div><div class="stat-delta">${s.shifted > 0 ? `plus ${eur(s.shifted, true)} van sparen naar beleggen` : s.income > 0 && moved > 0 ? `${Math.round((moved / s.income) * 100)}% van je inkomen` : ''}</div></div>
+    <div class="dash">
+      <div class="kpis wide">
+        <button class="kpi" data-act="kpi" data-v="in"><small>Inkomsten</small><b class="num">${eur(s.income, true)}</b><span>${ps ? deltaText(s.income, ps.income) : '&nbsp;'}</span></button>
+        <button class="kpi" data-act="kpi" data-v="out"><small>Uitgaven</small><b class="num">${eur(s.expense, true)}</b><span>${ps ? deltaText(s.expense, ps.expense, true) : '&nbsp;'}</span></button>
+        <button class="kpi ${s.net < 0 ? 'neg' : 'posi'}" data-act="kpi" data-v="net"><small>${s.net >= 0 ? 'Over' : 'Tekort'}</small><b class="num">${eur(Math.abs(s.net), true)}</b><span>${s.income > 0 ? `${Math.round((s.net / s.income) * 100)}% van je inkomen` : moved > 0 ? `${eur(moved, true)} opzij gezet` : '&nbsp;'}</span></button>
       </div>
-    </section>
 
-    ${S.period.mode === 'month' ? overviewExpected(S.period.anchor) : ''}
-    ${S.period.mode === 'month' && S.period.anchor === currentMonth() ? overviewReportLink() : ''}
+      <div class="card">
+        <div class="card-head"><b>${esc(d.nwTitle)}</b><button class="link" data-act="nav" data-v="vermogen">Details</button></div>
+        <button class="card-tap" data-act="nav" data-v="vermogen">
+          <div class="big num">${eur(d.nwTotal, true)}</div>
+          <div class="card-sub">${nwDiff != null ? `<span class="${upDown(nwDiff)}">${sgn(nwDiff, true)}</span> in ${esc(periodNoun())}` : 'betaalrekening, sparen en beleggen samen'}</div>
+          <div class="spark"><canvas id="nwSpark" aria-label="Vermogen afgelopen 12 maanden"></canvas></div>
+          <div class="ribbon" style="height:10px">${d.nw.map((x) => `<span style="flex-grow:${x.value};background:${x.color}"></span>`).join('')}</div>
+        </button>
+        <ul class="tot-legend" style="margin-top:8px">
+          ${d.nw.map((x) => `<li><button data-act="nw-tab" data-v="${['etf', 'aandeel', 'cash', 'invest'].includes(x.key) ? 'beleggen' : 'totaal'}"><i style="background:${x.color}"></i><span class="n">${esc(x.label)}</span><span class="p">${Math.round((x.value / nwSum) * 100)}%</span><span class="v num">${eur(x.value, true)}</span></button></li>`).join('')}
+        </ul>
+      </div>
 
-    <section>
-      <h2>Per maand</h2>
-      <div class="panel">
+      <div class="card">
+        <div class="card-head"><b>Uitgaven per categorie</b><button class="link" data-act="go-analyse" data-v="categorie">Analyse</button></div>
+        ${d.groups.length ? `
+        <div class="donut-box tot-donut"><canvas id="donutAll" aria-label="Uitgaven per categorie"></canvas><div class="donut-center"><b class="num">${eur(d.exTotal, true)}</b><small>${d.count} uitgaven</small></div></div>
+        <ul class="tot-legend">
+          ${top.map(gRow).join('')}
+          ${rest.length ? `<li class="more"><details><summary><i style="background:var(--line)"></i><span class="n">Nog ${rest.length} ${rest.length === 1 ? 'categorie' : 'categorieën'}</span><span class="p">${pct(restTotal)}</span><span class="v num">${eur(restTotal, true)}</span></summary><ul class="tot-legend">${rest.map(gRow).join('')}</ul></details></li>` : ''}
+        </ul>` : '<p class="muted">Geen uitgaven in deze periode.</p>'}
+      </div>
+
+      ${invCard}
+
+      <div class="card">
+        <div class="card-head"><b>Inkomsten en uitgaven per maand</b><span class="muted" style="font-size:12.5px">tik op een maand</span></div>
         <div class="legend"><span><i style="background:var(--s-income)"></i>Inkomsten</span><span><i style="background:var(--s-expense)"></i>Uitgaven</span></div>
-        <div class="chart-box"><canvas id="monthBars" aria-label="Inkomsten en uitgaven per maand"></canvas></div>
+        <div class="chart-box" style="height:190px"><canvas id="monthBars" aria-label="Inkomsten en uitgaven per maand"></canvas></div>
       </div>
-    </section>
 
-    ${merchants.length ? `
-    <section>
-      <h2>Waar je het meest uitgaf</h2>
-      <ul class="bars">
-        ${merchants.map((m) => `<li><button class="bar-row" data-act="merchant" data-v="${esc(m.key)}">
-          <span class="bar-ico">${catInfo(m.category).icon}</span>
-          <span class="bar-name">${esc(m.name)}<span class="bar-meta">${m.count}×</span></span>
-          <span class="bar-val num">${eur(m.total)}</span>
-          <span class="bar-track"><span class="bar-fill" style="width:${(m.total / maxM) * 100}%;background:${groupColor(catInfo(m.category).group)}"></span></span>
-        </button></li>`).join('')}
-      </ul>
-    </section>` : ''}
-
-    ${(s.advanceOpen > 0 || recentMatches.length) ? `
-    <section>
-      <h2>Voorgeschoten${s.advanceOpen > 0 ? ` <span class="aside">${eur(s.advanceOpen)} open</span>` : ''}</h2>
-      <div class="tx-list">
-        ${s.advanceOpenList.slice(0, 5).map((t) => txRow(t, rmap, 'Wacht op terugbetaling')).join('')}
-        ${recentMatches.map((t) => txRow(t, rmap)).join('')}
+      <div class="card">
+        <div class="card-head"><b>${latestAll ? 'Laatste transacties' : 'Laatste transacties'}</b><button class="link" data-act="nav" data-v="transacties">Alles</button></div>
+        <div class="tx-list flat">${latest.map((t) => txRow(t, rmap)).join('')}</div>
       </div>
-      <p class="help">Terugbetalingen met exact hetzelfde bedrag worden automatisch gekoppeld en tellen dan niet mee als uitgave of inkomen.</p>
-    </section>` : ''}
+
+      ${merchants.length ? `
+      <div class="card">
+        <div class="card-head"><b>Waar je het meest uitgaf</b></div>
+        <ul class="bars">
+          ${merchants.map((m) => `<li><button class="bar-row" data-act="merchant" data-v="${esc(m.key)}">
+            ${ico(m.name, catInfo(m.category).icon, groupColor(catInfo(m.category).group), 'bar-ico')}
+            <span class="bar-name">${esc(m.name)}<span class="bar-meta">${m.count}×</span></span>
+            <span class="bar-val num">${eur(m.total)}</span>
+            <span class="bar-track"><span class="bar-fill" style="width:${(m.total / maxM) * 100}%;background:${groupColor(catInfo(m.category).group)}"></span></span>
+          </button></li>`).join('')}
+        </ul>
+      </div>` : ''}
+
+      ${expected ? `<div class="card card-sec">${expected}</div>` : ''}
+
+      ${(s.advanceOpen > 0 || recentMatches.length) ? `
+      <div class="card">
+        <div class="card-head"><b>Voorgeschoten</b>${s.advanceOpen > 0 ? `<span class="muted" style="font-size:13px">${eur(s.advanceOpen)} open</span>` : ''}</div>
+        <div class="tx-list flat">
+          ${s.advanceOpenList.slice(0, 4).map((t) => txRow(t, rmap, 'Wacht op terugbetaling')).join('')}
+          ${recentMatches.map((t) => txRow(t, rmap)).join('')}
+        </div>
+      </div>` : ''}
+
+      ${S.period.mode === 'month' && S.period.anchor === currentMonth() ? `<div class="wide">${overviewReportLink()}</div>` : ''}
+    </div>
+    ${s.shifted > 0 ? `<p class="help">Je verplaatste ${eur(s.shifted)} van je spaarrekening naar beleggen. Dat is een verschuiving binnen je vermogen en telt niet mee als uitgave.</p>` : ''}
   `;
 }
 
@@ -565,7 +683,7 @@ function totalsData() {
   // Vermogen aan het eind van de gekozen periode (of nu, als die tot vandaag loopt)
   const now = range.to >= today;
   const endMonth = now ? currentMonth() : range.to.slice(0, 7);
-  const cur = L.netWorthSeries(vt, S.settings, [endMonth])[0];
+  const cur = L.netWorthSeries(vt, SX(), [endMonth])[0];
   const parts = [];
   if (cur.betaal != null) parts.push({ key: 'betaal', label: 'Betaalrekening', value: cur.betaal, color: cssVar('--s-betaal') });
   parts.push({ key: 'spaar', label: 'Spaarrekening', value: cur.spaar, color: cssVar('--s-spaar') });
@@ -596,58 +714,26 @@ function totalsData() {
   return { nw, nwTotal: cur.total, nwTitle: now ? 'Vermogen nu' : `Vermogen eind ${monthLabel(endMonth)}`, groups, exTotal, count: sum.count };
 }
 
-function safeTotals() {
-  try { return renderTotals(); } catch (e) { console.error(e); return ''; }
-}
-
-function renderTotals() {
-  if (!S.txs.length) return '';
-  const d = totalsData();
-  const pct = (v, t) => (t > 0 ? `${Math.round((v / t) * 100)}%` : '');
-  const nwSum = d.nw.reduce((a, x) => a + x.value, 0);
-  return `
-    <section style="margin-bottom:18px">
-      <h2>Totaaloverzicht</h2>
-      <div class="tot-grid">
-        <div class="panel tot-card">
-          <div class="tot-head"><b>${esc(d.nwTitle)}</b><button class="link" data-act="nav" data-v="vermogen">Details</button></div>
-          <div class="donut-box tot-donut"><canvas id="donutNw" aria-label="Verdeling van je vermogen"></canvas><div class="donut-center"><b class="num">${eur(d.nwTotal, true)}</b><small>totaal</small></div></div>
-          <ul class="tot-legend">
-            ${d.nw.map((x) => `<li><i style="background:${x.color}"></i><span class="n">${esc(x.label)}</span><span class="p">${pct(x.value, nwSum)}</span><span class="v num">${eur(x.value, true)}</span></li>`).join('')}
-          </ul>
-        </div>
-        <div class="panel tot-card">
-          <div class="tot-head"><b>Uitgaven per categorie</b><span class="muted" style="font-size:13px">${d.count} uitgaven</span></div>
-          ${d.groups.length ? `
-          <div class="donut-box tot-donut"><canvas id="donutAll" aria-label="Uitgaven per categorie"></canvas><div class="donut-center"><b class="num">${eur(d.exTotal, true)}</b><small>uitgegeven</small></div></div>
-          <ul class="tot-legend">
-            ${d.groups.map(([g, v]) => `<li><button data-act="tot-group" data-v="${g}"><i style="background:${groupColor(g)}"></i><span class="n">${GROUP_BY_ID[g].icon} ${esc(GROUP_BY_ID[g].name)}</span><span class="p">${pct(v, d.exTotal)}</span><span class="v num">${eur(v, true)}</span></button></li>`).join('')}
-          </ul>` : '<p class="muted">Geen uitgaven in deze periode.</p>'}
-        </div>
-      </div>
-    </section>`;
-}
-
 function drawTotalsCharts() {
-  if (!S.txs.length || !document.getElementById('donutNw')) return;
+  if (!S.txs.length) return;
   const d = totalsData();
-  const surface = cssVar('--surface');
-  const opts = (labels, onClick) => ({
-    cutout: '68%',
-    plugins: { tooltip: { callbacks: { label: (c) => ` ${labels[c.dataIndex]}: ${eur(c.raw)}` } } },
-    onClick,
-  });
-  const nwLabels = d.nw.map((x) => x.label);
-  makeChart('donutNw', {
-    type: 'doughnut',
-    data: { labels: nwLabels, datasets: [{ data: d.nw.map((x) => Math.round(x.value * 100) / 100), backgroundColor: d.nw.map((x) => x.color), borderColor: surface, borderWidth: 2, hoverOffset: 6 }] },
-    options: opts(nwLabels, () => { S.view = 'vermogen'; render(); window.scrollTo(0, 0); }),
-  });
   const gLabels = d.groups.map(([g]) => GROUP_BY_ID[g].name);
   makeChart('donutAll', {
     type: 'doughnut',
-    data: { labels: gLabels, datasets: [{ data: d.groups.map(([, v]) => Math.round(v * 100) / 100), backgroundColor: d.groups.map(([g]) => groupColor(g)), borderColor: surface, borderWidth: 2, hoverOffset: 6 }] },
-    options: opts(gLabels, (_e, els) => { if (els.length) openGroup(d.groups[els[0].index][0]); }),
+    data: { labels: gLabels, datasets: [{ data: d.groups.map(([, v]) => rr2(v)), backgroundColor: d.groups.map(([g]) => groupColor(g)), borderColor: cssVar('--surface'), borderWidth: 2, hoverOffset: 6 }] },
+    options: { cutout: '68%', plugins: { tooltip: { callbacks: { label: (c) => ` ${gLabels[c.dataIndex]}: ${eur(c.raw)}` } } }, onClick: (_e, els) => { if (els.length) openGroup(d.groups[els[0].index][0]); } },
+  });
+  // Vermogen over de laatste 12 maanden als lijntje
+  const end = periodRange().to.slice(0, 7) > currentMonth() ? currentMonth() : periodRange().to.slice(0, 7);
+  const first = dataMonths()[0] || end;
+  let ms = L.monthsBetween(shiftMonth(end, -11), end).filter((m) => m >= first);
+  if (ms.length < 2) ms = [end, end];
+  const series = L.netWorthSeries(visibleTxs(), SX(), ms).map((x) => x.total);
+  const col = cssVar('--s-income');
+  makeChart('nwSpark', {
+    type: 'line',
+    data: { labels: ms.map((m) => monthLabel(m)), datasets: [{ data: series, borderColor: col, backgroundColor: col + '1f', fill: 'start', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0.3 }] },
+    options: { interaction: { mode: 'index', intersect: false }, scales: { x: { display: false }, y: { display: false } }, layout: { padding: { top: 4, bottom: 2 } }, plugins: { tooltip: { callbacks: { label: (c) => ` ${eur(c.raw)}` } } } },
   });
 }
 
@@ -696,7 +782,7 @@ function txRow(t, rmap, note, opts = {}) {
   const voided = t.excluded || k === 'terugbetaling' || (back > 0 && back >= -t.amount - 0.001) || (t.advance && !back);
   const sign = t.amount > 0 ? '+' : '−';
   return `<button class="tx" data-act="tx" data-v="${t.id}">
-    <span class="tx-ico" style="background:color-mix(in srgb, ${g.color} 16%, transparent)">${cat.icon}</span>
+    ${ico(`${L.displayName(t)} ${t.name || ''}`, cat.icon, g.color)}
     <span class="tx-main"><div class="tx-name">${esc(L.displayName(t) || 'Onbekend')}</div><div class="tx-sub">${esc(note || cat.name)}${tk && tk.person ? esc(`, ${t.amount > 0 ? 'van' : 'aan'} ${tk.person}`) : ''}${tags.join('')}</div></span>
     <span class="tx-amt num ${t.amount > 0 ? 'in' : ''} ${voided ? 'void' : ''}"><span class="amt">${sign}${eur(Math.abs(t.amount))}</span>${opts.noDate ? '' : `<small>${fmtDate(t.date, false)}</small>`}</span>
   </button>`;
@@ -739,6 +825,64 @@ function catOptions(selected, { allowGroups = true, emptyLabel = 'Alle categorie
   return html;
 }
 
+const SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#6250d6', '#eda100', '#e87ba4', '#0e7490', '#8b5a2b', '#64748b', '#be123c'];
+
+// Overzicht bij een zoekterm of gekozen categorie: totaal, verdeling over categorieen en verloop per maand
+function searchSummary(list, rmap) {
+  const f = S.tx;
+  S.searchData = null;
+  if (!(f.q.trim().length >= 2 || f.cat)) return '';
+  const exp = list.filter((t) => L.kindOf(t) === 'expense');
+  if (exp.length < 2) return '';
+  const byCat = {};
+  const byMonth = {};
+  let total = 0;
+  let max = null;
+  for (const t of exp) {
+    const v = -L.effectiveAmount(t, rmap);
+    byCat[t.category] = (byCat[t.category] || 0) + v;
+    byMonth[t.date.slice(0, 7)] = (byMonth[t.date.slice(0, 7)] || 0) + v;
+    total += v;
+    if (!max || v > max.v) max = { v, t };
+  }
+  const cats = Object.entries(byCat).filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
+  if (!cats.length || total <= 0) return '';
+  const dates = exp.map((t) => t.date).sort();
+  const months = L.monthsBetween(dates[0].slice(0, 7), dates[dates.length - 1].slice(0, 7));
+  S.searchData = { cats, months, byMonth };
+  const title = f.q.trim() ? `“${f.q.trim()}”` : f.cat.startsWith('g:') ? GROUP_BY_ID[f.cat.slice(2)]?.name : catInfo(f.cat.slice(2)).name;
+  return `
+    <div class="panel tot-card" style="margin:10px 0 4px">
+      <div class="tot-head"><b>Overzicht ${esc(title || '')}</b><span class="muted" style="font-size:13px">${exp.length} uitgaven</span></div>
+      <div class="donut-box tot-donut"><canvas id="searchDonut" aria-label="Verdeling over categorieën"></canvas><div class="donut-center"><b class="num">${eur(total, true)}</b><small>uitgegeven</small></div></div>
+      <ul class="tot-legend">
+        ${cats.map(([c, v], i) => `<li><button data-act="tx-cat" data-v="c:${c}"><i style="background:${SERIES[i % SERIES.length]}"></i><span class="n">${catInfo(c).icon} ${esc(catInfo(c).name)}</span><span class="p">${Math.round((v / total) * 100)}%</span><span class="v num">${eur(v, true)}</span></button></li>`).join('')}
+      </ul>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat"><div class="stat-label">Gemiddeld</div><div class="stat-value num">${eur(total / exp.length)}</div><div class="stat-delta">per keer</div></div>
+        <div class="stat"><div class="stat-label">Per maand</div><div class="stat-value num">${eur(total / months.length, true)}</div><div class="stat-delta">over ${months.length} ${months.length === 1 ? 'maand' : 'maanden'}</div></div>
+        <div class="stat"><div class="stat-label">Grootste</div><div class="stat-value num">${eur(max.v, true)}</div><div class="stat-delta">${fmtDate(max.t.date, false)}</div></div>
+      </div>
+      ${months.length > 1 ? '<div class="chart-box" style="height:140px;margin-top:12px"><canvas id="searchBars" aria-label="Uitgaven per maand"></canvas></div>' : ''}
+      <p class="help" style="margin-bottom:0">Eerste keer ${fmtDate(dates[0], false)}, laatste keer ${fmtDate(dates[dates.length - 1], false)}. Tik op een categorie om daarop te filteren.</p>
+    </div>`;
+}
+
+function drawSearchCharts() {
+  const d = S.searchData;
+  if (!d) return;
+  makeChart('searchDonut', {
+    type: 'doughnut',
+    data: { labels: d.cats.map(([c]) => catInfo(c).name), datasets: [{ data: d.cats.map(([, v]) => rr2(v)), backgroundColor: d.cats.map((_, i) => SERIES[i % SERIES.length]), borderColor: cssVar('--surface'), borderWidth: 2, hoverOffset: 6 }] },
+    options: { cutout: '68%', plugins: { tooltip: { callbacks: { label: (c) => ` ${c.label}: ${eur(c.raw)}` } } } },
+  });
+  makeChart('searchBars', {
+    type: 'bar',
+    data: { labels: d.months.map((m) => `${monthLabel(m, false)}${d.months.length > 12 ? ' ' + m.slice(2, 4) : ''}`), datasets: [{ label: 'Uitgaven', data: d.months.map((m) => rr2(d.byMonth[m] || 0)), backgroundColor: cssVar('--s-expense'), borderRadius: 4, maxBarThickness: 22 }] },
+    options: { scales: { x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 8 } }, y: euroAxis }, plugins: { tooltip: { callbacks: { label: (c) => ` ${eur(c.raw)}` } } } },
+  });
+}
+
 function renderTransactions() {
   const list = filteredTxs();
   const f = S.tx;
@@ -775,6 +919,7 @@ function renderTransactions() {
       </select>
     </div>
     ${f.kind === 'guess' && list.length ? `<button class="btn block" data-act="approve-all" style="margin:10px 0 2px">Alle ${list.length} goedkeuren</button>` : ''}
+    ${searchSummary(list, rmap)}
     <p class="help" style="margin:8px 2px 0">${list.length} transacties${totalOut > 0 ? `, uitgaven ${eur(totalOut)}` : totalOut < 0 ? `, per saldo ${eur(-totalOut)} terugbetaald` : ''}${totalIn ? `, inkomsten ${eur(totalIn)}` : ''}</p>
     ${list.length ? html : '<div class="empty"><h3>Niets gevonden</h3><p>Pas de zoekterm of filters aan.</p></div>'}
     ${list.length > f.limit ? `<button class="btn ghost more-btn" data-act="tx-more">Meer laden (${list.length - f.limit})</button>` : ''}
@@ -948,6 +1093,173 @@ function openQuickSort() {
   show();
 }
 
+/* ---------- Vragenronde: wat de app niet zeker weet, met meerkeuze ---------- */
+
+function questionGroups() {
+  const main = mainAcc();
+  const pool = visibleTxs().filter((t) => t.account === main && !t.manual && !t.excluded && L.kindOf(t) !== 'terugbetaling' && (t.by === 'gok' || t.category === UNCATEGORIZED || t.category === UNCATEGORIZED_IN));
+  const map = new Map();
+  for (const t of pool) {
+    const mk = L.merchantKey(t);
+    const k = (t.amount < 0 ? '-' : '+') + (mk || t.id);
+    let g = map.get(k);
+    if (!g) map.set(k, g = { id: k, key: mk, name: L.displayName(t) || 'Onbekend', out: t.amount < 0, txs: [], total: 0 });
+    g.txs.push(t);
+    g.total += Math.abs(t.amount);
+  }
+  return [...map.values()].sort((a, b) => b.total - a.total);
+}
+
+// Meerkeuze: de gok van de app, aangevuld met de categorieen die jij het vaakst gebruikt
+function questionOptions(g) {
+  const count = {};
+  for (const t of g.txs) count[t.category] = (count[t.category] || 0) + 1;
+  const guess = Object.entries(count).sort((a, b) => b[1] - a[1]).map(([c]) => c).filter((c) => c !== UNCATEGORIZED && c !== UNCATEGORIZED_IN && !/^overig/.test(c));
+  const used = {};
+  for (const t of S.txs) {
+    if ((t.amount < 0) !== g.out || !(t.manual || t.by === 'regel' || t.by === 'standaard' || t.by === 'geleerd')) continue;
+    if (['terugbetaling', 'sparen', 'beleggen'].includes(t.category) || /^overig|^onbekend/.test(t.category)) continue;
+    used[t.category] = (used[t.category] || 0) + 1;
+  }
+  const fav = Object.entries(used).sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  const base = g.out ? ['supermarkt', 'restaurant', 'online', 'overboeking-persoon'] : ['ontvangen-persoon', 'salaris', 'overig-inkomen'];
+  const out = [];
+  for (const c of [...guess, ...fav, ...base]) if (!out.includes(c) && catInfo(c).name) out.push(c);
+  return out.slice(0, 6);
+}
+
+function openQuestions() {
+  let groups = questionGroups();
+  const totalStart = groups.length;
+  if (!totalStart) { toast('Geen vragen: alles is ingedeeld'); return; }
+  const skipped = new Set();
+  const show = () => {
+    groups = questionGroups().filter((g) => !skipped.has(g.id));
+    if (!groups.length) { closeSheet(); render(); toast('Klaar. Bedankt, de app heeft ervan geleerd.'); return; }
+    const g = groups[0];
+    const done = totalStart - groups.length;
+    const person = L.looksLikePerson(g.name) || !g.key;
+    const last = [...g.txs].sort((a, b) => b.date.localeCompare(a.date))[0];
+    const opts = questionOptions(g);
+    const cur = catInfo(last.category);
+    openSheet({
+      title: `Vraag ${Math.min(done + 1, totalStart)} van ${totalStart}`,
+      body: `
+        <div class="progress"><div style="width:${(done / totalStart) * 100}%"></div></div>
+        <div class="quick-card">
+          <div style="display:flex;gap:12px;align-items:center">${ico(g.name, cur.icon, groupOf(last.category).color)}<div><div class="detail-name">${esc(g.name)}</div><div class="muted" style="font-size:13.5px">${g.txs.length} ${g.txs.length === 1 ? 'transactie' : 'transacties'}, samen ${g.out ? '−' : '+'}${eur(g.total)}</div></div></div>
+          <div class="muted" style="font-size:13.5px;margin-top:8px">Laatste: ${fmtDate(last.date)}${last.desc ? `, ${esc(last.desc.slice(0, 90))}` : ''}</div>
+        </div>
+        <h2 style="font-size:16px;margin:16px 0 8px">${g.out ? 'Waar gaf je dit aan uit?' : 'Wat voor geld is dit?'}</h2>
+        <div class="q-opts">
+          ${opts.map((c) => `<button class="q-opt" data-q="${c}"><b>${catInfo(c).icon}</b><span>${esc(catInfo(c).name)}<small>${esc(GROUP_BY_ID[catInfo(c).group]?.name || '')}</small></span></button>`).join('')}
+        </div>
+        <p class="help">${person ? 'Dit lijkt een persoon of een losse betaling. Je antwoord geldt alleen voor deze transacties.' : `Je antwoord geldt voor alle transacties van ${esc(g.name)}, ook nieuwe. Zo leert de app ervan.`}</p>`,
+      foot: '<button class="btn ghost" data-q-other>Andere categorie</button><button class="btn quiet" data-q-skip>Overslaan</button>',
+      onMount: (sheet) => {
+        sheet.addEventListener('click', (e) => {
+          const b = e.target.closest('[data-q]');
+          if (b) { e.stopPropagation(); assignCategory(g.txs, b.dataset.q, person ? null : g.key); show(); return; }
+          if (e.target.closest('[data-q-skip]')) { e.stopPropagation(); skipped.add(g.id); show(); return; }
+          if (e.target.closest('[data-q-other]')) { e.stopPropagation(); openCategoryPicker(g.txs.map((t) => t.id), { title: g.name, onDone: () => show() }); }
+        });
+      },
+    });
+  };
+  show();
+}
+
+/* ---------- App-slot en meldingen ---------- */
+
+let hiddenAt = null;
+function showLock() {
+  let el = $('#lockScreen');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'lockScreen';
+    el.className = 'lock';
+    el.innerHTML = '<div class="lock-box"><div class="boot-mark"></div><h2>Geldzicht is vergrendeld</h2><button class="btn" id="lockBtn">Ontgrendelen</button><p class="help" id="lockMsg"></p><button class="link" id="lockOut">Lukt het niet? Uitloggen</button></div>';
+    document.body.appendChild(el);
+    el.querySelector('#lockBtn').onclick = tryUnlock;
+    el.querySelector('#lockOut').onclick = async () => { LK.disableLock(); try { if (S.store && S.store.signOut) await S.store.signOut(); } catch { /* leeg */ } location.reload(); };
+  }
+  tryUnlock();
+}
+async function tryUnlock() {
+  try {
+    if (await LK.unlock()) { const el = $('#lockScreen'); if (el) el.remove(); }
+  } catch {
+    const m = $('#lockMsg');
+    if (m) m.textContent = 'Niet gelukt. Tik op Ontgrendelen om het opnieuw te proberen.';
+  }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') hiddenAt = Date.now();
+  else if (LK.lockEnabled() && hiddenAt && Date.now() - hiddenAt > 60000 && !$('#lockScreen')) showLock();
+});
+async function toggleLock() {
+  try {
+    if (LK.lockEnabled()) {
+      if (await LK.unlock()) { LK.disableLock(); toast('App-slot uitgezet'); }
+    } else {
+      if (!(await LK.lockSupported())) { toast('Dit toestel heeft geen vingerafdruk of gezichtsherkenning ingesteld voor de browser.'); return; }
+      await LK.enableLock();
+      toast('App-slot staat aan op dit toestel');
+    }
+  } catch { toast('Niet gelukt of geannuleerd'); }
+  render();
+}
+
+const b64urlToBytes = (s) => { const pad = '='.repeat((4 - (s.length % 4)) % 4); return Uint8Array.from(atob((s + pad).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)); };
+const hashId = (str) => { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return 'd' + (h >>> 0).toString(36); };
+function pushId() { try { return localStorage.getItem('geldzicht.push'); } catch { return null; } }
+function pushOn() { const id = pushId(); return !!(id && S.push && S.push.subs && S.push.subs[id] && typeof Notification !== 'undefined' && Notification.permission === 'granted'); }
+
+function openPush() {
+  const on = pushOn();
+  openSheet({
+    title: 'Meldingen',
+    body: `
+      ${on ? '<div class="callout ok">Meldingen staan aan op dit toestel.</div>' : ''}
+      <p>Je krijgt een melding op je telefoon zodra je salaris is binnengekomen. Tikkies en overboekingen van je eigen rekeningen tellen niet mee.</p>
+      <p class="help">Je krijgt ook een seintje als je bankkoppeling bijna verloopt. De bank wordt één keer per dag uitgelezen, dus de melding komt de ochtend nadat het geld er staat.</p>
+      ${S.push && S.push.lastTest ? `<p class="help">Laatste testmelding: ${fmtDate(S.push.lastTest.slice(0, 10), false)}.</p>` : ''}`,
+    foot: on ? '<button class="btn ghost" data-act="push-off">Uitzetten</button><button class="btn" data-act="push-on">Testmelding sturen</button>' : '<button class="btn block" data-act="push-on">Meldingen aanzetten</button>',
+  });
+}
+async function enablePush() {
+  try {
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) { toast('Deze browser ondersteunt geen meldingen. Zet de app op je beginscherm en probeer het daar.'); return; }
+    const key = S.push && S.push.publicKey;
+    if (!key) { toast('Nog niet klaar. Probeer het over een paar minuten opnieuw.'); return; }
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('Meldingen zijn geblokkeerd. Sta ze toe in de instellingen van je browser.'); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(key) });
+    const json = sub.toJSON();
+    const id = hashId(json.endpoint);
+    await S.store.setMeta('push', { subs: { [id]: json }, test: true });
+    try { localStorage.setItem('geldzicht.push', id); } catch { /* leeg */ }
+    reg.showNotification('Geldzicht', { body: 'Meldingen staan aan op dit toestel. Binnen 10 minuten volgt nog een testmelding.', icon: 'icons/icon-192.png' });
+    closeSheet();
+    render();
+  } catch (e) { console.error(e); toast('Meldingen aanzetten is niet gelukt: ' + e.message); }
+}
+async function disablePush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) await sub.unsubscribe();
+    const id = pushId();
+    if (id) await S.store.setMeta('push', { subs: { [id]: null } });
+    try { localStorage.removeItem('geldzicht.push'); } catch { /* leeg */ }
+    toast('Meldingen uitgezet');
+  } catch (e) { toast('Niet gelukt: ' + e.message); }
+  closeSheet();
+  render();
+}
+
 /* ---------- Terugbetaling koppelen ---------- */
 
 function openLinkPicker(id) {
@@ -1048,7 +1360,7 @@ function recRow(r, opts = {}) {
   const g = groupOf(r.category);
   const pos = r.amount > 0;
   return `<div class="tx pos-row">
-    <span class="tx-ico" style="background:color-mix(in srgb, ${g.color} 16%, transparent)">${cat.icon}</span>
+    ${ico(r.name, cat.icon, g.color)}
     <span class="tx-main"><div class="tx-name">${esc(r.name)}</div><div class="tx-sub">${esc(opts.sub || `${cat.name}, rond de ${r.day}e`)}${r.periodic ? '<span class="tag">periodiek</span>' : ''}${opts.done === true ? '<span class="tag ok">al betaald</span>' : opts.late ? '<span class="tag acc">nog niet gezien</span>' : opts.done === false ? '<span class="tag">verwacht</span>' : ''}</div></span>
     <span class="tx-amt num ${pos ? 'in' : ''}"><span class="amt">${pos ? '+' : '−'}${eur(Math.abs(r.amount))}</span>${opts.right ? `<small>${esc(opts.right)}</small>` : ''}</span>
   </div>`;
@@ -1063,11 +1375,11 @@ function overviewExpected(mk) {
   const outOpen = -open.filter((r) => r.amount < 0).reduce((a, r) => a + r.amount, 0);
   const inOpen = open.filter((r) => r.amount > 0).reduce((a, r) => a + r.amount, 0);
   const show = (open.length ? open : items).slice(0, 4);
-  return `<section>
-    <h2>${open.length ? 'Nog verwacht deze maand' : 'Vaste posten deze maand'} <span class="aside">${open.length ? [outOpen ? `${eur(outOpen, true)} eruit` : '', inOpen ? `${eur(inOpen, true)} erin` : ''].filter(Boolean).join(', ') : 'alles binnen'}</span></h2>
-    <div class="tx-list">${show.map((r) => recRow(r, { done: r.done, late: r.late, right: fmtDate(r.date, false) })).join('')}</div>
+  return `<div>
+    <div class="card-head"><b>${open.length ? 'Nog verwacht deze maand' : 'Vaste posten deze maand'}</b><span class="muted" style="font-size:13px">${open.length ? [outOpen ? `${eur(outOpen, true)} eruit` : '', inOpen ? `${eur(inOpen, true)} erin` : ''].filter(Boolean).join(', ') : 'alles binnen'}</span></div>
+    <div class="tx-list flat">${show.map((r) => recRow(r, { done: r.done, late: r.late, right: fmtDate(r.date, false) })).join('')}</div>
     <button class="link" style="margin-top:8px" data-act="go-analyse" data-v="vast">Alle vaste lasten (${rec.active.length})</button>
-  </section>`;
+  </div>`;
 }
 
 function defaultReportMonth() {
@@ -1078,7 +1390,7 @@ function defaultReportMonth() {
 
 function overviewReportLink() {
   const mk = defaultReportMonth();
-  const r = N.monthReport(visibleTxs(), S.settings, mk);
+  const r = N.monthReport(visibleTxs(), SX(), mk);
   return `<button class="banner report-link" data-act="go-report" data-v="${mk}"><div><b>Maandafsluiting ${monthLabel(mk)}</b><span>${r.s.net >= 0 ? 'Over' : 'Tekort'}: ${eur(r.s.net, true)}. Uitgaven ${eur(r.s.expense, true)}${r.avg.expense ? `, gemiddeld ${eur(r.avg.expense, true)}` : ''}. ${r.highlights.length} opvallende punten.</span></div><span class="go">Bekijken</span></button>`;
 }
 
@@ -1163,7 +1475,7 @@ function renderReport() {
   const mk = S.reportMonth || defaultReportMonth();
   const vt = visibleTxs();
   const rec = recurringData();
-  const r = N.monthReport(vt, S.settings, mk, { recurring: rec });
+  const r = N.monthReport(vt, SX(), mk, { recurring: rec });
   const ms = dataMonths();
   const canPrev = ms.length && mk > ms[0];
   const canNext = mk < (ms[ms.length - 1] || mk);
@@ -1269,7 +1581,7 @@ function renderReport() {
 
 function drawReportCharts() {
   const mk = S.reportMonth || defaultReportMonth();
-  const r = N.monthReport(visibleTxs(), S.settings, mk);
+  const r = N.monthReport(visibleTxs(), SX(), mk);
   makeChart('reportWeekday', {
     type: 'bar',
     data: { labels: WEEKDAYS, datasets: [{ label: 'Uitgaven', data: r.patterns.weekday.map((v) => Math.round(v)), backgroundColor: cssVar('--s-expense'), borderRadius: 4, maxBarThickness: 26 }] },
@@ -1445,12 +1757,12 @@ function renderNetWorth() {
 function renderNetWorthTotal() {
   const vt = visibleTxs();
   const months = nwMonths();
-  const series = L.netWorthSeries(vt, S.settings, months);
+  const series = L.netWorthSeries(vt, SX(), months);
   const cur = series[series.length - 1];
   const prev = series.length > 1 ? series[series.length - 2] : null;
   const first = series[0];
   const tot = splitEur(cur.total);
-  const snaps = S.settings.investSnapshots || [];
+  const snaps = allSnaps();
   const pf = latestPortfolio();
   const pfGain = pf ? (pf.gain != null ? pf.gain : portfolioGain(pf.positions)) : null;
   const gain = hasBux() ? cur.invest - I.netDepositsUpTo(S.settings.invest.events, nowIso()) : pfGain != null ? pfGain : snaps.length ? cur.invest - cur.inleg : null;
@@ -1541,11 +1853,12 @@ function invState() {
   const events = S.settings.invest.events;
   const now = nowIso();
   const pf = I.buildPortfolio(events);
-  const snaps = S.settings.investSnapshots || [];
+  const snaps = allSnaps();
   const val = I.investValueAt(events, snaps, now);
   const rows = pf.open.map((p) => {
     const m = I.snapValueFor(val.snap, p, events);
-    return { ...p, value: m ? Number(m.value) : null, pct: m && m.pct != null ? Number(m.pct) : null };
+    const it = priceItem(p.isin);
+    return { ...p, value: m ? Number(m.value) : null, pct: m && m.pct != null ? Number(m.pct) : null, price: it ? it.p[it.p.length - 1] : null };
   });
   const tradedAfter = val.snap ? events.filter((e) => (e.kind === 'buy' || e.kind === 'sell') && e.t > I.snapMoment(val.snap)) : [];
   return { events, pf, val, rows, tradedAfter, now };
@@ -1582,14 +1895,19 @@ function renderInvest() {
   for (const e of shown) { const d = e.t.slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(e); }
   for (const [d, items] of byDay) histHtml += `<div class="day-head"><span>${fmtDate(d)}</span></div><div class="tx-list">${items.map(invRow).join('')}</div>`;
   const snapDate = val.snap ? fmtDate(val.snap.date, false) : null;
+  const hasPrices = rows.some((r) => r.price != null);
+  const changes = new Map(rows.map((r) => [r.isin, posChange(r, f.range)]));
+  const rangeTot = { eur: 0, base: 0 };
+  for (const r of rows) { const c = changes.get(r.isin); if (c) { rangeTot.eur += c.eur; rangeTot.base += r.value - c.eur; } }
+  const auto = val.snap && val.snap.auto;
   return `
     <section class="hero">
       <p class="hero-label">Waarde beleggingen${val.book ? ' (aankoopwaarde)' : ''}</p>
       <div class="nw-total num">${big.main}<span class="cents" style="font-size:.42em;color:var(--muted)">${big.cents}</span></div>
       <p class="hero-sub">${sgn(gain)} rendement op ${eur(tot.netDeposits)} ingelegd${tot.netDeposits ? ` (${(gain / tot.netDeposits * 100).toLocaleString('nl-NL', { maximumFractionDigits: 1 })}%)` : ''}</p>
-      <p class="help" style="margin-top:-8px">${val.book ? 'Nog geen actuele waardes ingevuld: dit is wat je ervoor betaald hebt plus je cash.' : val.estimated ? `Op basis van je waardes van ${snapDate}, plus wat je daarna hebt gestort.` : `Volgens je waardes van ${snapDate}.`}</p>
+      <p class="help" style="margin-top:-8px">${auto ? `Op basis van de slotkoersen van ${snapDate}${val.estimated ? ', plus wat je daarna hebt gestort' : ''}.` : val.book ? 'Nog geen actuele waardes ingevuld: dit is wat je ervoor betaald hebt plus je cash.' : val.estimated ? `Op basis van je waardes van ${snapDate}, plus wat je daarna hebt gestort.` : `Volgens je waardes van ${snapDate}.`}</p>
     </section>
-    ${tradedAfter.length || val.book || rows.some((r) => r.value == null) ? `<button class="banner" data-act="nw-update"><div><b>${val.book ? 'Vul de actuele waardes in' : tradedAfter.length ? `${tradedAfter.length} ${tradedAfter.length === 1 ? 'transactie' : 'transacties'} na ${snapDate}` : `${rows.filter((r) => r.value == null).length} posities zonder actuele waarde`}</b><span>Neem de waarde per positie over uit de BUX-app, dan klopt je rendement per positie. Je posities staan al klaar.</span></div><span class="go">Bijwerken</span></button>` : ''}
+    ${!auto && (tradedAfter.length || val.book || rows.some((r) => r.value == null)) ? `<button class="banner" data-act="nw-update"><div><b>${val.book ? 'Vul de actuele waardes in' : tradedAfter.length ? `${tradedAfter.length} ${tradedAfter.length === 1 ? 'transactie' : 'transacties'} na ${snapDate}` : `${rows.filter((r) => r.value == null).length} posities zonder actuele waarde`}</b><span>Neem de waarde per positie over uit de BUX-app, dan klopt je rendement per positie. Je posities staan al klaar.</span></div><span class="go">Bijwerken</span></button>` : ''}
     <section>
       <div class="stats">
         <div class="stat"><div class="stat-label">Ingelegd</div><div class="stat-value num">${eur(tot.netDeposits, true)}</div><div class="stat-delta">${events.filter((e) => e.kind === 'deposit').length} stortingen</div></div>
@@ -1607,20 +1925,31 @@ function renderInvest() {
       <div class="ribbon" role="img" aria-label="Verdeling over ETF's, aandelen en cash">${types.map(([t, v]) => `<span style="flex-grow:${v};background:${TYPE_COLOR[t]}" title="${TYPE_LABEL[t]}: ${eur(v)}"></span>`).join('')}</div>
       <div class="ribbon-legend">${types.map(([t, v]) => `<span><i style="background:${TYPE_COLOR[t]}"></i>${TYPE_LABEL[t]} ${Math.round((v / typeTotal) * 100)}%</span>`).join('')}</div>
     </section>
+    ${hasPrices ? `<section>
+      <h2>Waarde afgelopen jaar</h2>
+      <div class="panel">
+        <div class="legend"><span><i style="background:var(--s-stock)"></i>Waarde</span><span><i style="background:var(--s-invest)"></i>Ingelegd</span></div>
+        <div class="chart-box"><canvas id="invValChart" aria-label="Waarde van je beleggingen door de tijd"></canvas></div>
+      </div>
+    </section>` : ''}
     <section>
       <h2>Posities <span class="aside">${rows.length}${known.length && known.length < rows.length ? `, ${known.length} met actuele waarde` : ''}</span></h2>
+      ${hasPrices ? `
+      <div class="chips" style="padding:0 0 8px">${INV_RANGES.map(([k, l]) => `<button class="chip ${f.range === k ? 'on' : ''}" data-act="inv-range" data-v="${k}">${l}</button>`).join('')}</div>
+      <div class="callout ${rangeTot.eur >= 0 ? 'ok' : ''}" style="margin:0 0 10px">Koerswinst ${INV_RANGE_TEXT[f.range]}: <b class="${upDown(rangeTot.eur)}">${sgn(rangeTot.eur)}</b>${rangeTot.base > 0 ? ` (${pctTxt((rangeTot.eur / rangeTot.base) * 100)})` : ''}</div>` : ''}
       <div class="tx-list">
         ${rows.sort((a, b) => (b.value ?? b.cost) - (a.value ?? a.cost)).map((r) => {
+          const ch = changes.get(r.isin);
           const res = r.value != null ? r.value - r.cost : null;
-          return `<button class="tx" data-act="inv-pos" data-v="${esc(r.isin)}">
-            <span class="tx-ico" style="background:color-mix(in srgb, ${TYPE_COLOR[r.type]} 18%, transparent)">${r.type === 'etf' ? '🌍' : '📈'}</span>
-            <span class="tx-main"><div class="tx-name">${esc(r.name)}</div><div class="tx-sub">${stuks(r.qty)}, gem. ${eur(r.avg)}</div></span>
-            <span class="tx-amt num"><span class="amt">${eur(r.value != null ? r.value : r.cost)}</span><small class="${res != null && res >= 0 ? 'pos' : ''}">${res != null ? `${res >= 0 ? '+' : '−'}${eur(Math.abs(res))}` : 'aankoopwaarde'}</small></span>
+          return `<button class="tx pos-row" data-act="inv-pos" data-v="${esc(r.isin)}">
+            ${ico(r.name, r.type === 'etf' ? '🌍' : '📈', TYPE_COLOR[r.type])}
+            <span class="tx-main"><div class="tx-name">${esc(r.name)}</div><div class="tx-sub">${stuks(r.qty)}${r.price != null ? `, koers ${eur(r.price)}` : `, gem. ${eur(r.avg)}`}</div></span>
+            <span class="tx-amt num"><span class="amt">${eur(r.value != null ? r.value : r.cost)}</span>${ch ? `<small class="${upDown(ch.eur)}">${pctTxt(ch.pct)}, ${ch.eur >= 0 ? '+' : '−'}${eur(Math.abs(ch.eur))}</small>` : `<small class="${res != null && res >= 0 ? 'pos' : ''}">${res != null ? `${res >= 0 ? '+' : '−'}${eur(Math.abs(res))}` : 'aankoopwaarde'}</small>`}</span>
           </button>`;
         }).join('')}
         <div class="tx pos-row"><span class="tx-ico">💶</span><span class="tx-main"><div class="tx-name">Cash</div><div class="tx-sub">Nog niet belegd</div></span><span class="tx-amt num"><span class="amt">${eur(tot.cash)}</span></span></div>
       </div>
-      <p class="help">Resultaat per positie = actuele waarde min wat je ervoor betaalde (zonder transactiekosten). Posities waarin je na je laatste waardes nog hebt gehandeld, tonen de aankoopwaarde.</p>
+      <p class="help">${hasPrices ? `Koersen van ${fmtDate(lastPriceDate(), false)}, automatisch opgehaald en omgerekend naar euro. Het percentage is de koersverandering, het bedrag is wat jouw positie daardoor meer of minder waard werd. Kleine verschillen met de BUX-app zijn normaal.` : 'Resultaat per positie = actuele waarde min wat je ervoor betaalde (zonder transactiekosten). Posities waarin je na je laatste waardes nog hebt gehandeld, tonen de aankoopwaarde.'}</p>
     </section>
     <section>
       <h2>Ingelegd door de tijd</h2>
@@ -1657,6 +1986,20 @@ function renderInvest() {
 
 function drawInvestChart() {
   const events = S.settings.invest.events;
+  const snapsA = autoSnaps();
+  if (snapsA.length > 2) {
+    const all = allSnaps();
+    const vals = snapsA.map((x) => I.investValueAt(events, all, x.at).value);
+    const dep = snapsA.map((x) => I.netDepositsUpTo(events, x.at));
+    makeChart('invValChart', {
+      type: 'line',
+      data: { labels: snapsA.map((x) => shortDate(x.date)), datasets: [
+        { label: 'Waarde', data: vals, borderColor: cssVar('--s-stock'), backgroundColor: cssVar('--s-stock') + '22', fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.25 },
+        { label: 'Ingelegd', data: dep, borderColor: cssVar('--s-invest'), borderWidth: 1.5, borderDash: [4, 3], pointRadius: 0, stepped: true },
+      ] },
+      options: { interaction: { mode: 'index', intersect: false }, scales: { x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 5 } }, y: euroAxis }, plugins: { tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${eur(c.raw)}` } } } },
+    });
+  }
   const startM = events[0].t.slice(0, 7);
   const months = L.monthsBetween(startM, currentMonth());
   const data = months.map((m) => I.netDepositsUpTo(events, `${L.lastDayOfMonth(m)}T23:59:59`));
@@ -1682,7 +2025,12 @@ function openInvestPosition(isin) {
     title: p.name,
     body: `
       <div class="detail-amt num">${eur(p.value != null ? p.value : p.cost)}</div>
-      <div class="muted">${p.value != null ? 'actuele waarde volgens je laatste invoer' : 'aankoopwaarde, nog geen actuele waarde'}</div>
+      <div class="muted">${p.price != null ? `koers ${eur(p.price)} op ${fmtDate(priceItem(p.isin).d.slice(-1)[0], false)}` : p.value != null ? 'actuele waarde volgens je laatste invoer' : 'aankoopwaarde, nog geen actuele waarde'}</div>
+      ${p.price != null && p.qty > 0 ? `
+      <div class="panel" style="margin:12px 0"><div class="chart-box" style="height:150px"><canvas id="posChart" aria-label="Koers afgelopen jaar"></canvas></div></div>
+      <table class="tbl"><thead><tr><th>Periode</th><th class="r">Koers</th><th class="r">Jouw positie</th></tr></thead><tbody>
+        ${INV_RANGES.map(([k, l]) => { const c = posChange(p, k); return c ? `<tr><td>${l}</td><td class="r num ${upDown(c.pct)}">${pctTxt(c.pct)}</td><td class="r num ${upDown(c.eur)}">${sgn(c.eur)}</td></tr>` : ''; }).join('')}
+      </tbody></table>` : ''}
       <dl class="kv">
         <dt>Aantal</dt><dd class="num">${fmtQty(p.qty)}</dd>
         <dt>Gem. aankoopprijs</dt><dd class="num">${p.avg != null ? eur(p.avg) : '-'}</dd>
@@ -1697,6 +2045,19 @@ function openInvestPosition(isin) {
       </dl>
       <h2 style="font-size:15px">Transacties</h2>
       <div class="tx-list">${list.map((e) => invRow(e).replace('</small>', ` ${fmtDate(e.t.slice(0, 10), false)}</small>`)).join('')}</div>`,
+    onMount: () => {
+      const it = priceItem(isin);
+      if (!it || p.price == null) return;
+      const col = cssVar('--s-stock');
+      makeChart('posChart', {
+        type: 'line',
+        data: { labels: it.d.map(shortDate), datasets: [
+          { label: 'Koers', data: it.p, borderColor: col, backgroundColor: col + '22', fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0.2 },
+          ...(p.avg ? [{ label: 'Jouw gemiddelde aankoopprijs', data: it.d.map(() => rr2(p.avg)), borderColor: cssVar('--muted'), borderWidth: 1, borderDash: [4, 3], pointRadius: 0 }] : []),
+        ] },
+        options: { interaction: { mode: 'index', intersect: false }, scales: { x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 4 } }, y: { ...euroAxis, beginAtZero: false } }, plugins: { tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${eur(c.raw)}` } } } },
+      });
+    },
   });
 }
 
@@ -1752,7 +2113,7 @@ async function handleBux(text, file) {
 
 function drawNetWorthChart() {
   const months = nwMonths();
-  const series = L.netWorthSeries(visibleTxs(), S.settings, months);
+  const series = L.netWorthSeries(visibleTxs(), SX(), months);
   const mk = (label, key, color, fill) => ({
     label, data: series.map((r) => (r[key] == null ? null : Math.round(r[key]))), borderColor: color,
     backgroundColor: color + 'b3', fill, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, cubicInterpolationMode: 'monotone',
@@ -1837,7 +2198,7 @@ function readPositions(sheet) {
 
 function openNwUpdate() {
   const vt = visibleTxs();
-  const series = L.netWorthSeries(vt, S.settings, [currentMonth()]);
+  const series = L.netWorthSeries(vt, SX(), [currentMonth()]);
   const pf = latestPortfolio();
   let start = pf ? pf.positions : [{ type: 'etf' }, { name: 'Cash', type: 'cash' }];
   if (hasBux()) {
@@ -1913,6 +2274,7 @@ function renderSettings() {
   const nPayers = (S.settings.payers || []).length;
   const accounts = [...new Set(S.txs.map((t) => t.account))];
   const lastImport = (S.settings.imports || []).slice(-1)[0];
+  const nQuestions = S.txs.length ? questionGroups().length : 0;
   return `
     <section style="margin-top:6px">
       <h2>Gegevens</h2>
@@ -1920,7 +2282,7 @@ function renderSettings() {
         ${st.mode === 'cloud' ? `<button class="set-row" data-act="bank"><span class="ico">🔗</span><span class="txt">Bankkoppeling ABN AMRO<small>${esc(bankStatusText())}</small></span><span class="chev">›</span></button>` : ''}
         <button class="set-row" data-act="import"><span class="ico">⤓</span><span class="txt">Bestand importeren<small>${lastImport ? `Laatst: ${fmtDate(lastImport.date)}, ${lastImport.added} nieuw. ` : ''}ABN AMRO TXT of XLS, of de BUX-export (CSV)</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="add-tx"><span class="ico">✍️</span><span class="txt">Transactie toevoegen<small>Iets dat nog niet in je bankbestand staat, bijvoorbeeld een overboeking van vandaag</small></span><span class="chev">›</span></button>
-        <button class="set-row" data-act="quick"><span class="ico">🗂️</span><span class="txt">Snel indelen<small>Transacties zonder categorie één voor één indelen</small></span><span class="chev">›</span></button>
+        <button class="set-row" data-act="questions"><span class="ico">❔</span><span class="txt">Vragenronde<small>${nQuestions ? `${nQuestions} ${nQuestions === 1 ? 'vraag' : 'vragen'} over transacties die de app niet zeker weet. Meerkeuze, en de app leert van je antwoorden.` : 'Geen vragen: alles is ingedeeld'}</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="howto"><span class="ico">❓</span><span class="txt">Zo download je je transacties<small>Stappen voor ABN AMRO</small></span><span class="chev">›</span></button>
       </div>
     </section>
@@ -1936,6 +2298,9 @@ function renderSettings() {
     <section>
       <h2>App</h2>
       <div class="set-group">
+        ${st.mode === 'cloud' ? `<button class="set-row" data-act="push"><span class="ico">🔔</span><span class="txt">Meldingen<small>${pushOn() ? 'Aan: je krijgt bericht als je salaris binnen is' : 'Krijg een melding als je salaris binnen is'}</small></span><span class="chev">›</span></button>` : ''}
+        <button class="set-row" data-act="lock"><span class="ico">🔒</span><span class="txt">App-slot met vingerafdruk of gezicht<small>${LK.lockEnabled() ? 'Aan op dit toestel. Tik om uit te zetten.' : 'Uit. Tik om aan te zetten op dit toestel.'}</small></span><span class="switch"><input type="checkbox" ${LK.lockEnabled() ? 'checked' : ''} disabled><span></span></span></button>
+        <button class="set-row" data-act="logos"><span class="ico">🏷️</span><span class="txt">Logo's van winkels<small>${S.settings.logos === false ? 'Uit' : 'Aan: bekende winkels krijgen hun logo'}</small></span><span class="switch"><input type="checkbox" ${S.settings.logos === false ? '' : 'checked'} disabled><span></span></span></button>
         <button class="set-row" data-act="set" data-v="theme"><span class="ico">🌓</span><span class="txt">Weergave<small>${{ light: 'Licht', dark: 'Donker' }[localStorage.getItem('geldzicht.theme')] || 'Volgt je telefoon'}</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="export-csv"><span class="ico">📄</span><span class="txt">Exporteren naar CSV<small>Voor Excel, met categorieën</small></span><span class="chev">›</span></button>
         <button class="set-row" data-act="export-json"><span class="ico">💾</span><span class="txt">Back-up downloaden<small>Alle transacties, regels en instellingen</small></span><span class="chev">›</span></button>
@@ -2027,6 +2392,8 @@ function startBankWatch() {
     if (S.bankSheet && document.querySelector('#sheetRoot .sheet.show')) openBank();
     if (S.view === 'meer' || S.view === 'overzicht') render();
   });
+  S.store.watchMeta('prices', (d) => { S.prices = d && d.items ? d : null; if (S.view === 'vermogen' || S.view === 'overzicht') render(); });
+  S.store.watchMeta('push', (d) => { S.push = d; if (S.view === 'meer') render(); });
   // Teruggekomen van ABN AMRO met een code
   let pending = null;
   try { pending = JSON.parse(sessionStorage.getItem('geldzicht.bankCode') || 'null'); } catch { /* leeg */ }
@@ -2550,6 +2917,17 @@ document.addEventListener('click', (e) => {
     case 'nw-update': openNwUpdate(); break;
     case 'nw-tab': S.nwTab = v; S.view = 'vermogen'; render(); window.scrollTo(0, 0); break;
     case 'inv-kind': S.inv.kind = v; S.inv.limit = 60; render(); break;
+    case 'inv-range': S.inv.range = v; render(); break;
+    case 'kpi':
+      if (v === 'net') { S.view = 'analyse'; S.analyse = 'trend'; } else { S.view = 'transacties'; S.tx = { ...S.tx, kind: v, scope: 'period', cat: '', q: '', sort: 'high', limit: 150 }; }
+      render(); window.scrollTo(0, 0); break;
+    case 'tx-cat': S.tx.cat = S.tx.cat === v ? '' : v; S.tx.limit = 150; render(); break;
+    case 'questions': openQuestions(); break;
+    case 'lock': toggleLock(); break;
+    case 'push': openPush(); break;
+    case 'push-on': enablePush(); break;
+    case 'push-off': disablePush(); break;
+    case 'logos': S.settings.logos = S.settings.logos === false; markSettings(); render(); break;
     case 'inv-more': S.inv.limit += 120; render(); break;
     case 'inv-pos': openInvestPosition(v); break;
     case 'bux-howto': openBuxHowTo(); break;
@@ -2716,6 +3094,7 @@ async function start() {
     }
   } catch { /* leeg */ }
   applyTheme();
+  if (LK.lockEnabled()) showLock();
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { applyTheme(); render(); });
   S.store = await createStore(firebaseConfig);
   if (S.store.mode === 'cloud') {
