@@ -9,7 +9,7 @@ import * as N from './insights.js';
 import { logoDomain, logoUrl } from './logos.js';
 import * as LK from './lock.js';
 
-const VERSION = '1.9.0';
+const VERSION = '1.9.1';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -521,7 +521,10 @@ function posChange(p, range) {
     if (e.isin !== p.isin || (e.kind !== 'buy' && e.kind !== 'sell')) continue;
     if (e.t <= fromT) qtyThen += e.kind === 'buy' ? e.qty : -e.qty; else net += -e.eur;
   }
-  return { eur: p.value - qtyThen * then - net, pct: (now / then - 1) * 100, price: now };
+  // Rendement van jouw positie: wat er nu staat tegenover wat er toen stond plus wat je sindsdien bijkocht
+  const base = qtyThen * then + net;
+  const eur = p.value - base;
+  return { eur, pct: base > 0 ? (eur / base) * 100 : 0, price: now, koers: (now / then - 1) * 100 };
 }
 
 function groupColor(id) { return GROUP_BY_ID[id]?.color || '#a8a29e'; }
@@ -613,6 +616,7 @@ function renderOverview() {
         <button class="card-tap" data-act="nav" data-v="vermogen">
           <div class="big num">${eur(d.nwTotal, true)}</div>
           <div class="card-sub">${nwDiff != null ? `<span class="${upDown(nwDiff)}">${sgn(nwDiff, true)}</span> in ${esc(periodNoun())}` : 'betaalrekening, sparen en beleggen samen'}</div>
+          <div class="spark-title">Vermogen aan het eind van elke maand</div>
           <div class="spark"><canvas id="nwSpark" aria-label="Vermogen afgelopen 12 maanden"></canvas></div>
           <div class="ribbon" style="height:10px">${d.nw.map((x) => `<span style="flex-grow:${x.value};background:${x.color}"></span>`).join('')}</div>
         </button>
@@ -634,9 +638,10 @@ function renderOverview() {
       ${invCard}
 
       <div class="card">
-        <div class="card-head"><b>Inkomsten en uitgaven per maand</b><span class="muted" style="font-size:12.5px">tik op een maand</span></div>
+        <div class="card-head"><b>Inkomsten en uitgaven per maand</b><span class="muted" style="font-size:12.5px">tik op een staaf</span></div>
+        <p class="help" style="margin:-4px 0 6px">Blauw is wat er binnenkwam, oranje wat je uitgaf. Sparen en beleggen tellen niet als uitgave.</p>
         <div class="legend"><span><i style="background:var(--s-income)"></i>Inkomsten</span><span><i style="background:var(--s-expense)"></i>Uitgaven</span></div>
-        <div class="chart-box" style="height:190px"><canvas id="monthBars" aria-label="Inkomsten en uitgaven per maand"></canvas></div>
+        <div class="chart-box" style="height:230px"><canvas id="monthBars" aria-label="Inkomsten en uitgaven per maand"></canvas></div>
       </div>
 
       <div class="card">
@@ -733,7 +738,14 @@ function drawTotalsCharts() {
   makeChart('nwSpark', {
     type: 'line',
     data: { labels: ms.map((m) => monthLabel(m)), datasets: [{ data: series, borderColor: col, backgroundColor: col + '1f', fill: 'start', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0.3 }] },
-    options: { interaction: { mode: 'index', intersect: false }, scales: { x: { display: false }, y: { display: false } }, layout: { padding: { top: 4, bottom: 2 } }, plugins: { tooltip: { callbacks: { label: (c) => ` ${eur(c.raw)}` } } } },
+    options: {
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { grid: { display: false }, border: { display: true, color: cssVar('--line') }, ticks: { maxTicksLimit: 6, callback: (_v, i) => `${monthLabel(ms[i], false)} ${ms[i].slice(2, 4)}` } },
+        y: { border: { display: true, color: cssVar('--line') }, grid: { color: cssVar('--grid') }, ticks: { maxTicksLimit: 4, callback: (v) => compactEur(v) }, title: { display: true, text: 'Vermogen in euro', color: cssVar('--muted'), font: { size: 11, weight: 600 } } },
+      },
+      plugins: { tooltip: { callbacks: { title: (c) => `Eind ${monthLabel(ms[c[0].dataIndex])}`, label: (c) => ` Vermogen: ${eur(c.raw)}` } } },
+    },
   });
 }
 
@@ -753,7 +765,10 @@ function drawOverviewCharts() {
     },
     options: {
       interaction: { mode: 'index', intersect: false },
-      scales: { x: { grid: { display: false }, border: { display: false } }, y: euroAxis },
+      scales: {
+        x: { grid: { display: false }, border: { display: true, color: cssVar('--line') }, title: { display: true, text: 'Maand', color: cssVar('--muted'), font: { size: 11, weight: 600 } }, ticks: { callback: (_v, i) => `${monthLabel(months[i], false)}${months.length > 6 || months[0].slice(0, 4) !== months[months.length - 1].slice(0, 4) ? ' ' + months[i].slice(2, 4) : ''}` } },
+        y: { ...euroAxis, border: { display: true, color: cssVar('--line') }, title: { display: true, text: 'Bedrag in euro', color: cssVar('--muted'), font: { size: 11, weight: 600 } }, ticks: { callback: (v) => compactEur(v), maxTicksLimit: 6 } },
+      },
       plugins: { tooltip: { callbacks: { title: (c) => monthLabel(months[c[0].dataIndex]), label: (c) => ` ${c.dataset.label}: ${eur(c.raw)}`, afterBody: (c) => `Over: ${eur(data[c[0].dataIndex].net)}` } } },
       onClick: (_e, els) => { if (els.length) { S.period = { mode: 'month', anchor: months[els[0].index] }; render(); window.scrollTo(0, 0); } },
     },

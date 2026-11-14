@@ -57,7 +57,9 @@ async function stock(isin, from, known) {
     idn = sn?.quote?.market?.idNotation;
     if (!idn) { stats['geen notering'] = (stats['geen notering'] || 0) + 1; return null; }
   }
-  const h = await get(`https://api.onvista.de/api/v1/instruments/STOCK/${ev}/eod_history?idNotation=${idn}&range=Y1&startDate=${from}`, 'koers');
+  // range=Y1 geeft een jaar vanaf startDate: begin daarom iets minder dan een jaar terug, zodat de reeks tot vandaag loopt
+  const start = iso(new Date(Date.now() - 362 * 86400000));
+  const h = await get(`https://api.onvista.de/api/v1/instruments/STOCK/${ev}/eod_history?idNotation=${idn}&range=Y1&startDate=${start}`, 'koers');
   if (!h || !h.datetimeLast || h.datetimeLast.length < 3) { stats['geen historie'] = (stats['geen historie'] || 0) + 1; return null; }
   let cur = h.isoCurrency;
   const d = [];
@@ -109,6 +111,8 @@ async function main() {
     }
     items[pos.isin] = { ...s, p: s.p.map((v) => Math.round(v * 10000) / 10000) };
     ok++;
+    const age = Math.round((now - Date.parse(s.d[s.d.length - 1])) / 86400000);
+    if (age > 4) stats['oude koers'] = (stats['oude koers'] || 0) + 1;
   }
   await meta('prices').set({ updated: now.toISOString(), tried: now.toISOString(), items, found: ok, total: open.length });
   log('klaar:', ok, 'van', open.length, 'posities met koers', JSON.stringify(stats), 'past niet:', noFit);
