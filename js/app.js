@@ -9,7 +9,7 @@ import * as N from './insights.js';
 import { logoDomain, logoUrl } from './logos.js';
 import * as LK from './lock.js';
 
-const VERSION = '1.9.1';
+const VERSION = '1.9.2';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -635,6 +635,8 @@ function renderOverview() {
         </ul>` : '<p class="muted">Geen uitgaven in deze periode.</p>'}
       </div>
 
+      ${reconCard(s, range)}
+
       ${invCard}
 
       <div class="card">
@@ -717,6 +719,52 @@ function totalsData() {
   const groups = Object.entries(sum.byGroup).filter(([, v]) => v > 0.5).sort((a, b) => b[1] - a[1]);
   const exTotal = groups.reduce((a, [, v]) => a + v, 0);
   return { nw, nwTotal: cur.total, nwTitle: now ? 'Vermogen nu' : `Vermogen eind ${monthLabel(endMonth)}`, groups, exTotal, count: sum.count };
+}
+
+// Van "over" naar vermogen: begin + over + koersresultaat + overig = eind
+function reconCard(s, range) {
+  const vt = visibleTxs();
+  const first = vt.reduce((m, t) => (t.date < m ? t.date : m), '9999');
+  if (first === '9999') return '';
+  const today = todayIso();
+  const end = range.to > today ? today : range.to;
+  const startDate = range.from > first ? range.from : first;
+  const fromStart = startDate === first;
+  const events = (S.settings.invest && S.settings.invest.events) || [];
+  const snaps = allSnaps();
+  const invAt = (d) => (events.length ? I.investValueAt(events, snaps, d).value : 0);
+  // Saldo per rekening vlak voor een datum
+  const balBefore = (date) => {
+    let tot = 0;
+    const accs = [...new Set(vt.map((t) => t.account))];
+    for (const a of accs) {
+      const list = vt.filter((t) => t.account === a && t.balanceBefore != null).sort((x, y) => x.date.localeCompare(y.date));
+      if (!list.length) continue;
+      const before = list.filter((t) => t.date < date);
+      tot += before.length ? before[before.length - 1].balanceAfter : list[0].balanceBefore;
+    }
+    return tot;
+  };
+  const startInv = invAt(`${startDate}T00:00:00`);
+  const endInv = invAt(`${end}T23:59:59`);
+  const start = balBefore(startDate) + startInv;
+  const endTot = balBefore(addDays(end, 1)) + endInv;
+  const dep = events.length ? I.netDepositsUpTo(events, `${end}T23:59:59`) - I.netDepositsUpTo(events, `${startDate}T00:00:00`) : 0;
+  const koers = endInv - startInv - dep;
+  const rest = endTot - start - s.net - koers;
+  const row = (label, v, cls = '') => `<li class="${cls}"><span class="n">${label}</span><span class="v num">${cls === 'sum' || cls === 'begin' ? eur(v, true) : sgn(v, true)}</span></li>`;
+  return `
+      <div class="card">
+        <div class="card-head"><b>Van “over” naar je vermogen</b></div>
+        <ul class="recon">
+          ${row(fromStart ? `Vermogen bij begin van je gegevens (${fmtDate(first, false)})` : `Vermogen op ${fmtDate(startDate, false)}`, start, 'begin')}
+          ${row('Over: inkomsten min uitgaven', s.net)}
+          ${events.length ? row('Koerswinst of -verlies beleggingen', koers) : ''}
+          ${Math.abs(rest) >= 1 ? row('Overig: geld onderweg, kosten, afronding', rest, 'muted') : ''}
+          ${row(end >= today ? 'Vermogen nu' : `Vermogen op ${fmtDate(end, false)}`, endTot, 'sum')}
+        </ul>
+        ${fromStart ? '<p class="help" style="margin-bottom:0">Het beginvermogen is wat je al had voordat je gegevens beginnen, zoals eerder verdiend salaris. Dat telt niet als inkomsten in deze periode.</p>' : ''}
+      </div>`;
 }
 
 function drawTotalsCharts() {

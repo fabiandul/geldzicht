@@ -409,7 +409,7 @@ export function summarize(txs, settings, range) {
   const main = mainAccount(settings, txs);
   const rmap = reimbursementMap(txs);
   const res = {
-    income: 0, expense: 0, saved: 0, invested: 0, shifted: 0,
+    income: 0, expense: 0, saved: 0, invested: 0, shifted: 0, refunds: 0,
     byGroup: {}, byCat: {}, byMerchant: {}, byIncomeCat: {}, count: 0,
     fixed: 0, variable: 0, advanceOpen: 0, advanceOpenList: [],
   };
@@ -433,6 +433,13 @@ export function summarize(txs, settings, range) {
       continue;
     }
     if (k !== 'expense' || eff === 0) continue;
+    // Geld terug in een uitgavencategorie (retour, terugstorting): telt als inkomsten, zodat uitgaven nooit negatief worden
+    if (eff > 0) {
+      res.income += eff;
+      res.refunds = (res.refunds || 0) + eff;
+      res.byIncomeCat.retour = (res.byIncomeCat.retour || 0) + eff;
+      continue;
+    }
     const cost = -eff;
     res.count++;
     res.expense += cost;

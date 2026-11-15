@@ -134,6 +134,8 @@ export const CATEGORIES = [
   { id: 'tikkie-ontvangen', group: 'inkomen', name: 'Tikkies ontvangen', icon: '🤝', dir: 'in', kw: ['tikkie', 'aab inz tikkie', 'betaalverzoek'] },
   { id: 'verkoop', group: 'inkomen', name: 'Verkopen', icon: '🏷️', dir: 'in', kw: ['marktplaats', 'vinted', 'ebay', 'bol com partner', 'catawiki', '2dehands', 'tweedehands'] },
   { id: 'terugbetaling', group: 'inkomen', name: 'Terugbetalingen', icon: '↩️', dir: 'in', kw: [] },
+  { id: 'studie-inkomen', group: 'inkomen', name: 'Studiefinanciering en studiebijdragen', icon: '🎓', dir: 'in', kw: ['duo hoofdrekening', 'studiefinanciering', 'dienst uitvoering onderwijs', 'studiebijdrage'] },
+  { id: 'retour', group: 'inkomen', name: 'Retouren en geld terug', icon: '🔄', dir: 'in', kw: [] },
   { id: 'ontvangen-persoon', group: 'inkomen', name: 'Ontvangen van personen', icon: '👤', dir: 'in', kw: [] },
   { id: 'cadeau-ontvangen', group: 'inkomen', name: 'Geld gekregen', icon: '🎁', dir: 'in', kw: ['verjaardag', 'kerstcadeau', 'sinterklaas', 'cadeautje'] },
   { id: 'overig-inkomen', group: 'inkomen', name: 'Overige inkomsten', icon: '💶', dir: 'in', kw: [] },
