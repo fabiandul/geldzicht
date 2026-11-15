@@ -733,18 +733,21 @@ function reconCard(s, range) {
   const events = (S.settings.invest && S.settings.invest.events) || [];
   const snaps = allSnaps();
   const invAt = (d) => (events.length ? I.investValueAt(events, snaps, d).value : 0);
-  // Saldo per rekening vlak voor een datum
-  const balBefore = (date) => {
+  // Saldo's van betaal- en spaarrekening aan het eind van een dag (dezelfde rekenwijze als bij Vermogen)
+  const main = mainAcc();
+  const closing = L.closingBalances(vt);
+  const accs = Object.keys(closing).filter((acc) => acc === main || L.accountRole(S.settings, acc, vt) === 'spaar');
+  const balEnd = (date) => {
     let tot = 0;
-    const accs = [...new Set(vt.map((t) => t.account))];
-    for (const a of accs) {
-      const list = vt.filter((t) => t.account === a && t.balanceBefore != null).sort((x, y) => x.date.localeCompare(y.date));
-      if (!list.length) continue;
-      const before = list.filter((t) => t.date < date);
-      tot += before.length ? before[before.length - 1].balanceAfter : list[0].balanceBefore;
+    for (const acc of accs) {
+      let v = null;
+      for (const e of closing[acc]) { if (e.date <= date) v = e.balance; else break; }
+      if (v == null) { const firstTx = vt.filter((t) => t.account === acc && t.balanceBefore != null).sort((x, y) => x.date.localeCompare(y.date))[0]; v = firstTx ? firstTx.balanceBefore : 0; }
+      tot += v;
     }
     return tot;
   };
+  const balBefore = (date) => balEnd(addDays(date, -1));
   const startInv = invAt(`${startDate}T00:00:00`);
   const endInv = invAt(`${end}T23:59:59`);
   const start = balBefore(startDate) + startInv;
