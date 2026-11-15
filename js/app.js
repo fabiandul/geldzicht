@@ -9,7 +9,7 @@ import * as N from './insights.js';
 import { logoDomain, logoUrl } from './logos.js';
 import * as LK from './lock.js';
 
-const VERSION = '1.9.2';
+const VERSION = '1.9.3';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -552,6 +552,13 @@ function renderOverview() {
   const rmap = L.reimbursementMap(vt);
   const d = totalsData();
   const moved = s.saved + s.invested;
+  let rd = null;
+  try { rd = reconData(s, range); } catch (e) { console.error(e); }
+  // Bij "Alles": ook wat je had voor je gegevens begonnen en de waardegroei van beleggingen meetellen, zodat "over" je vermogen is
+  const all = S.period.mode === 'all' && rd;
+  const extra = all ? rd.start + rd.koers + rd.rest : 0;
+  const incShown = s.income + extra;
+  const netShown = s.net + extra;
 
   // Vermogen: stand, verschil over de periode en verdeling
   const nwSum = d.nw.reduce((a, x) => a + x.value, 0) || 1;
@@ -606,9 +613,9 @@ function renderOverview() {
 
     <div class="dash">
       <div class="kpis wide">
-        <button class="kpi" data-act="kpi" data-v="in"><small>Inkomsten</small><b class="num">${eur(s.income, true)}</b><span>${ps ? deltaText(s.income, ps.income) : '&nbsp;'}</span></button>
+        <button class="kpi" data-act="kpi" data-v="in"><small>Inkomsten${all ? ' en eerder' : ''}</small><b class="num">${eur(incShown, true)}</b><span>${all ? `waarvan ${eur(rd.start, true)} van vóór ${fmtDate(rd.first, false)}` : ps ? deltaText(s.income, ps.income) : '&nbsp;'}</span></button>
         <button class="kpi" data-act="kpi" data-v="out"><small>Uitgaven</small><b class="num">${eur(s.expense, true)}</b><span>${ps ? deltaText(s.expense, ps.expense, true) : '&nbsp;'}</span></button>
-        <button class="kpi ${s.net < 0 ? 'neg' : 'posi'}" data-act="kpi" data-v="net"><small>${s.net >= 0 ? 'Over' : 'Tekort'}</small><b class="num">${eur(Math.abs(s.net), true)}</b><span>${s.income > 0 ? `${Math.round((s.net / s.income) * 100)}% van je inkomen` : moved > 0 ? `${eur(moved, true)} opzij gezet` : '&nbsp;'}</span></button>
+        <button class="kpi ${netShown < 0 ? 'neg' : 'posi'}" data-act="kpi" data-v="net"><small>${netShown >= 0 ? 'Over' : 'Tekort'}</small><b class="num">${eur(Math.abs(netShown), true)}</b><span>${all ? 'is je vermogen nu' : s.income > 0 ? `${Math.round((s.net / s.income) * 100)}% van je inkomen` : moved > 0 ? `${eur(moved, true)} opzij gezet` : '&nbsp;'}</span></button>
       </div>
 
       <div class="card">
@@ -635,7 +642,7 @@ function renderOverview() {
         </ul>` : '<p class="muted">Geen uitgaven in deze periode.</p>'}
       </div>
 
-      ${reconCard(s, range)}
+      ${S.period.mode === 'all' ? (rd ? allCard(s, rd) : '') : reconCard(s, range, rd)}
 
       ${invCard}
 
@@ -722,7 +729,24 @@ function totalsData() {
 }
 
 // Van "over" naar vermogen: begin + over + koersresultaat + overig = eind
-function reconCard(s, range) {
+function allCard(s, rd) {
+  const row = (label, v, cls = '') => `<li class="${cls}"><span class="n">${label}</span><span class="v num">${cls === 'sum' ? eur(v, true) : sgn(v, true)}</span></li>`;
+  return `
+      <div class="card">
+        <div class="card-head"><b>Alles bij elkaar</b></div>
+        <ul class="recon">
+          ${row(`Al gespaard vóór ${fmtDate(rd.first, false)}`, rd.start)}
+          ${row('Inkomsten sinds die datum', s.income)}
+          ${row('Uitgaven sinds die datum', -s.expense)}
+          ${rd.hasInv ? row('Waardegroei beleggingen', rd.koers) : ''}
+          ${Math.abs(rd.rest) >= 1 ? row('Overig (rente, geld onderweg)', rd.rest, 'muted') : ''}
+          ${row('Over = je vermogen nu', rd.endTot, 'sum')}
+        </ul>
+        <p class="help" style="margin-bottom:0">Van vóór ${fmtDate(rd.first, false)} heeft de app geen transacties. Wat je toen al had, telt als één bedrag mee, zonder uitsplitsing.</p>
+      </div>`;
+}
+
+function reconData(s, range) {
   const vt = visibleTxs();
   const first = vt.reduce((m, t) => (t.date < m ? t.date : m), '9999');
   if (first === '9999') return '';
@@ -755,6 +779,13 @@ function reconCard(s, range) {
   const dep = events.length ? I.netDepositsUpTo(events, `${end}T23:59:59`) - I.netDepositsUpTo(events, `${startDate}T00:00:00`) : 0;
   const koers = endInv - startInv - dep;
   const rest = endTot - start - s.net - koers;
+  return { first, startDate, end, today, fromStart, start, koers, rest, endTot, hasInv: events.length > 0 };
+}
+
+function reconCard(s, range, rd) {
+  if (!rd) return '';
+  const { first, startDate, end, today, fromStart, start, koers, rest, endTot } = rd;
+  const events = rd.hasInv ? [1] : [];
   const row = (label, v, cls = '') => `<li class="${cls}"><span class="n">${label}</span><span class="v num">${cls === 'sum' || cls === 'begin' ? eur(v, true) : sgn(v, true)}</span></li>`;
   return `
       <div class="card">
