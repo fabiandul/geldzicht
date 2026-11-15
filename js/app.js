@@ -9,7 +9,7 @@ import * as N from './insights.js';
 import { logoDomain, logoUrl } from './logos.js';
 import * as LK from './lock.js';
 
-const VERSION = '1.9.3';
+const VERSION = '1.9.4';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -2028,6 +2028,13 @@ function renderInvest() {
         <div class="legend"><span><i style="background:var(--s-stock)"></i>Waarde</span><span><i style="background:var(--s-invest)"></i>Ingelegd</span></div>
         <div class="chart-box"><canvas id="invValChart" aria-label="Waarde van je beleggingen door de tijd"></canvas></div>
       </div>
+    </section>
+    <section>
+      <h2>Totale winst in euro</h2>
+      <div class="panel">
+        <div class="chart-box"><canvas id="invGainChart" aria-label="Totale winst of verlies op je beleggingen door de tijd"></canvas></div>
+      </div>
+      <p class="help">Winst = waarde van je beleggingen min wat je er in totaal hebt ingestort. Dividend, rente en kosten zitten erin verwerkt. De grafiek gaat een jaar terug, zo ver als de opgehaalde koersen reiken.</p>
     </section>` : ''}
     <section>
       <h2>Posities <span class="aside">${rows.length}${known.length && known.length < rows.length ? `, ${known.length} met actuele waarde` : ''}</span></h2>
@@ -2088,6 +2095,24 @@ function drawInvestChart() {
     const all = allSnaps();
     const vals = snapsA.map((x) => I.investValueAt(events, all, x.at).value);
     const dep = snapsA.map((x) => I.netDepositsUpTo(events, x.at));
+    const gain = vals.map((v, i) => rr2(v - dep[i]));
+    const pos = cssVar('--pos');
+    const neg = '#d9483b';
+    makeChart('invGainChart', {
+      type: 'line',
+      data: { labels: snapsA.map((x) => shortDate(x.date)), datasets: [{ label: 'Winst', data: gain, borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.25,
+        segment: { borderColor: (c) => (c.p1.parsed.y < 0 ? neg : pos) },
+        borderColor: pos,
+        fill: { target: 'origin', above: pos + '26', below: neg + '26' } }] },
+      options: {
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { grid: { display: false }, border: { display: true, color: cssVar('--line') }, ticks: { maxTicksLimit: 5 }, title: { display: true, text: 'Datum', color: cssVar('--muted'), font: { size: 11, weight: 600 } } },
+          y: { ...euroAxis, border: { display: true, color: cssVar('--line') }, grid: { color: (c) => (c.tick.value === 0 ? cssVar('--muted') : cssVar('--grid')) }, title: { display: true, text: 'Winst in euro', color: cssVar('--muted'), font: { size: 11, weight: 600 } } },
+        },
+        plugins: { tooltip: { callbacks: { label: (c) => ` Winst: ${c.raw >= 0 ? '+' : '−'}${eur(Math.abs(c.raw))}`, afterLabel: (c) => `Waarde ${eur(vals[c.dataIndex])}, ingelegd ${eur(dep[c.dataIndex])}` } } },
+      },
+    });
     makeChart('invValChart', {
       type: 'line',
       data: { labels: snapsA.map((x) => shortDate(x.date)), datasets: [
