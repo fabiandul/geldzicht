@@ -9,7 +9,7 @@ import * as N from './insights.js';
 import { logoDomain, logoUrl } from './logos.js';
 import * as LK from './lock.js';
 
-const VERSION = '1.9.4';
+const VERSION = '1.9.5';
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const eur = (n, whole) => L.fmtEur(n, { whole });
@@ -642,7 +642,7 @@ function renderOverview() {
         </ul>` : '<p class="muted">Geen uitgaven in deze periode.</p>'}
       </div>
 
-      ${S.period.mode === 'all' ? (rd ? allCard(s, rd) : '') : reconCard(s, range, rd)}
+      ${S.period.mode === 'all' && rd ? allCard(s, rd) : ''}
 
       ${invCard}
 
