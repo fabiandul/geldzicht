@@ -6,7 +6,7 @@ on:
         description: 'Publieke sleutel (base64 PEM) waarmee de export wordt versleuteld'
         required: true
 permissions:
-  contents: read
+  contents: write
 jobs:
   export:
     runs-on: ubuntu-latest
@@ -35,8 +35,10 @@ jobs:
           openssl pkeyutl -encrypt -pubin -inkey pub.pem -in key.bin -out key.enc
           mkdir -p ../../out && mv export.enc key.enc ../../out/
           rm -f export.json key.bin
-      - uses: actions/upload-artifact@v4
-        with:
-          name: export
-          path: out/
-          retention-days: 1
+      - name: Versleuteld klaarzetten op een tijdelijke branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan export-tmp
+          git rm -rq --cached . && find . -mindepth 1 -maxdepth 1 ! -name out ! -name .git -exec rm -rf {} +
+          git add out/export.enc out/key.enc && git commit -qm "Versleutelde export (tijdelijk)" && git push -fq origin export-tmp
