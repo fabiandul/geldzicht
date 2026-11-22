@@ -1,0 +1,42 @@
+name: Export
+on:
+  workflow_dispatch:
+    inputs:
+      pubkey:
+        description: 'Publieke sleutel (base64 PEM) waarmee de export wordt versleuteld'
+        required: true
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Installeren
+        working-directory: scripts/bank
+        run: |
+          mkdir -p app && cp ../../js/parser.js ../../js/logic.js ../../js/categories.js ../../js/invest.js app/
+          npm install --no-save --silent firebase-admin@12.7.0 web-push@3.6.7
+      - name: Exporteren en versleutelen
+        working-directory: scripts/bank
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          LOGIN_EMAIL: fabian@geldzicht.app
+          PUBKEY: ${{ github.event.inputs.pubkey }}
+        run: |
+          node export.mjs
+          echo "$PUBKEY" | base64 -d > pub.pem
+          openssl rand -out key.bin 32
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in export.json -out export.enc -pass file:key.bin
+          openssl pkeyutl -encrypt -pubin -inkey pub.pem -in key.bin -out key.enc
+          mkdir -p ../../out && mv export.enc key.enc ../../out/
+          rm -f export.json key.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: export
+          path: out/
+          retention-days: 1
